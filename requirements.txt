@@ -1,0 +1,23 @@
+# Diapos AI - PDF Slide Explainer
+# Python dependencies for Streamlit app
+
+# Streamlit
+streamlit>=1.28.0
+
+# AI/ML
+openai>=1.12.0
+
+# PDF Processing
+PyMuPDF>=1.23.0
+
+# Image Processing
+Pillow>=10.0.0
+
+# PDF Report Generation
+reportlab>=4.0.0
+
+# Data Processing
+python-dateutil>=2.8.2
+
+# Standard libraries (included in Python)
+# json, base64, os, typing, io, tempfile
