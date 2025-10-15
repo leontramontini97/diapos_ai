@@ -369,6 +369,57 @@ def main():
     st.title("📊 PDF Slide Explainer")
     st.markdown("*Powered by Flora Facturación Infrastructure*")
     
+    # Initialize session state
+    if 'slides' not in st.session_state:
+        st.session_state.slides = None
+    if 'explanations' not in st.session_state:
+        st.session_state.explanations = None
+    if 'uploaded_file_name' not in st.session_state:
+        st.session_state.uploaded_file_name = None
+    if 'pdf_report' not in st.session_state:
+        st.session_state.pdf_report = None
+    
+    # Sidebar for configuration
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        
+        # API Key input
+        st.subheader("🔑 OpenAI API Key")
+        api_key_input = st.text_input(
+            "Enter your OpenAI API Key:",
+            type="password",
+            help="Your API key will not be stored. Get one at https://platform.openai.com/api-keys"
+        )
+        
+        # Custom prompt
+        st.subheader("🎯 Custom Analysis Prompt")
+        use_custom_prompt = st.checkbox("Use custom prompt", help="Customize the AI analysis prompt")
+        
+        custom_prompt = None
+        if use_custom_prompt:
+            custom_prompt = st.text_area(
+                "Custom Prompt:",
+                height=200,
+                value="""Analiza esta diapositiva (Slide #{slide_number}) y proporciona una explicación completa y estructurada:
+
+🎯 **ANÁLISIS REQUERIDO:**
+
+1. **TÍTULO/TEMA PRINCIPAL**
+   - Identifica el título o tema central de la diapositiva
+
+2. **CONTENIDO CLAVE**
+   - Puntos principales presentados
+   - Datos, estadísticas o información relevante
+
+FORMATO DE SALIDA (JSON):
+{{
+  "titulo": "Título o tema principal",
+  "contenido_clave": ["Punto 1", "Punto 2"],
+  "resumen": "Resumen ejecutivo"
+}}""",
+                help="Use {slide_number} as placeholder for slide number"
+            )
+    
     st.markdown("""
     Upload a PDF presentation and get detailed explanations for each slide using AI vision analysis.
     
@@ -377,15 +428,20 @@ def main():
     - 📋 Structured explanations with key insights
     - 🖼️ Visual element recognition and description
     - 📊 Content extraction and summarization
+    - 📄 Professional PDF report generation
     """)
     
     # Initialize OpenAI client
-    try:
-        openai_client = init_openai_client()
-        st.success("✅ OpenAI client initialized successfully")
-    except Exception as e:
-        st.error(f"❌ Failed to initialize OpenAI client: {str(e)}")
+    openai_client = init_openai_client(api_key_input)
+    
+    if not openai_client:
+        if not api_key_input:
+            st.warning("⚠️ Please enter your OpenAI API Key in the sidebar to continue.")
+        else:
+            st.error("❌ Invalid OpenAI API Key. Please check your key.")
         st.stop()
+    else:
+        st.success("✅ OpenAI client initialized successfully")
     
     # File upload
     st.subheader("📁 Upload PDF Presentation")
@@ -398,49 +454,62 @@ def main():
     if uploaded_file is not None:
         st.success(f"✅ File uploaded: {uploaded_file.name}")
         
-        # Extract slides
-        with st.spinner("🔄 Extracting slides from PDF..."):
-            slides = extract_slides_from_pdf(uploaded_file)
+        # Check if this is a new file or same file
+        if st.session_state.uploaded_file_name != uploaded_file.name:
+            # New file - clear previous results
+            st.session_state.slides = None
+            st.session_state.explanations = None
+            st.session_state.pdf_report = None
+            st.session_state.uploaded_file_name = uploaded_file.name
+            
+            # Extract slides
+            with st.spinner("🔄 Extracting slides from PDF..."):
+                st.session_state.slides = extract_slides_from_pdf(uploaded_file)
         
-        if not slides:
+        if not st.session_state.slides:
             st.error("❌ Failed to extract slides from PDF")
             return
         
-        st.success(f"✅ Extracted {len(slides)} slides")
+        st.success(f"✅ Extracted {len(st.session_state.slides)} slides")
         
         # Process slides
-        if st.button("🚀 Analyze All Slides", type="primary"):
-            
-            # Create progress tracking
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            explanations = []
-            
-            for i, slide_bytes in enumerate(slides):
-                slide_num = i + 1
-                status_text.text(f"Analyzing slide {slide_num} of {len(slides)}...")
+        if st.session_state.explanations is None:
+            if st.button("🚀 Analyze All Slides", type="primary"):
                 
-                # Analyze slide
-                explanation = explain_slide(slide_bytes, openai_client, slide_num)
-                explanations.append(explanation)
+                # Create progress tracking
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                # Update progress
-                progress_bar.progress((i + 1) / len(slides))
-            
-            status_text.text("✅ Analysis complete!")
-            
-            # Display results
+                explanations = []
+                
+                for i, slide_bytes in enumerate(st.session_state.slides):
+                    slide_num = i + 1
+                    status_text.text(f"Analyzing slide {slide_num} of {len(st.session_state.slides)}...")
+                    
+                    # Analyze slide
+                    explanation = explain_slide(slide_bytes, openai_client, slide_num, custom_prompt)
+                    explanations.append(explanation)
+                    
+                    # Update progress
+                    progress_bar.progress((i + 1) / len(st.session_state.slides))
+                
+                status_text.text("✅ Analysis complete!")
+                
+                # Store results in session state
+                st.session_state.explanations = explanations
+        
+        # Display results if available
+        if st.session_state.explanations is not None:
             st.subheader("📋 Slide Analysis Results")
             
-            for i, (slide_bytes, explanation) in enumerate(zip(slides, explanations)):
+            for i, (slide_bytes, explanation) in enumerate(zip(st.session_state.slides, st.session_state.explanations)):
                 slide_num = i + 1
                 
                 with st.expander(f"📊 Slide {slide_num} Analysis", expanded=True):
                     
                     # Display slide image (larger, full width)
                     st.subheader(f"🖼️ Slide {slide_num}")
-                    st.image(slide_bytes, caption=f"Slide {slide_num}", width=800)  # Larger fixed width
+                    st.image(slide_bytes, caption=f"Slide {slide_num}", width=800)
                     
                     # Add some space
                     st.markdown("---")
@@ -478,8 +547,6 @@ def main():
                             st.markdown("**💡 Insights:**")
                             for item in exp_data['insights']:
                                 st.markdown(f"• {item}")
-                        
-                        # Removed raw response display - users already have JSON export
                     
                     else:
                         st.error(f"❌ {explanation.get('error', 'Unknown error')}")
@@ -492,10 +559,10 @@ def main():
             with col1:
                 # JSON Export
                 export_data = {
-                    "pdf_name": uploaded_file.name,
-                    "total_slides": len(slides),
+                    "pdf_name": st.session_state.uploaded_file_name,
+                    "total_slides": len(st.session_state.slides),
                     "analysis_timestamp": str(datetime.now()),
-                    "explanations": explanations
+                    "explanations": st.session_state.explanations
                 }
                 
                 export_json = json.dumps(export_data, indent=2, ensure_ascii=False)
@@ -503,27 +570,35 @@ def main():
                 st.download_button(
                     label="📥 Download Analysis as JSON",
                     data=export_json,
-                    file_name=f"{uploaded_file.name.replace('.pdf', '')}_analysis.json",
-                    mime="application/json"
+                    file_name=f"{st.session_state.uploaded_file_name.replace('.pdf', '')}_analysis.json",
+                    mime="application/json",
+                    key="json_download"
                 )
             
             with col2:
                 # PDF Export
-                if st.button("📄 Generate PDF Report"):
+                if st.button("📄 Generate PDF Report", key="generate_pdf"):
                     with st.spinner("🔄 Generating PDF report..."):
                         try:
-                            pdf_bytes = generate_pdf_report(slides, explanations, uploaded_file.name)
-                            
-                            st.download_button(
-                                label="📥 Download PDF Report",
-                                data=pdf_bytes,
-                                file_name=f"{uploaded_file.name.replace('.pdf', '')}_analysis_report.pdf",
-                                mime="application/pdf"
+                            st.session_state.pdf_report = generate_pdf_report(
+                                st.session_state.slides, 
+                                st.session_state.explanations, 
+                                st.session_state.uploaded_file_name
                             )
                             st.success("✅ PDF report generated successfully!")
                             
                         except Exception as e:
                             st.error(f"❌ Error generating PDF: {str(e)}")
+                
+                # Show PDF download button if report is generated
+                if st.session_state.pdf_report is not None:
+                    st.download_button(
+                        label="📥 Download PDF Report",
+                        data=st.session_state.pdf_report,
+                        file_name=f"{st.session_state.uploaded_file_name.replace('.pdf', '')}_analysis_report.pdf",
+                        mime="application/pdf",
+                        key="pdf_download"
+                    )
 
 if __name__ == "__main__":
     main()
