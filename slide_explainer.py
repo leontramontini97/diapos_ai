@@ -1,5 +1,4 @@
-"""
-PDF Slide Explainer using Flora Facturacion Infrastructure
+"""PDF Slide Explainer using Flora Facturacion Infrastructure
 Streamlit app that processes PDF slides and generates explanations for each slide
 """
 
@@ -13,12 +12,13 @@ import fitz  # PyMuPDF for PDF processing
 from PIL import Image
 import io
 from datetime import datetime
-from reportlab.lib.pagesizes import letter, A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, PageBreak
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib.colors import HexColor
+from docx import Document
+from docx.shared import Inches, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.style import WD_STYLE_TYPE
 import tempfile
+import re
+
 
 # === Prompt template por defecto ===
 PROMPT_TEMPLATE = """\
@@ -35,10 +35,10 @@ Al final, agrega un **resumen corto** con lo más importante de toda la explicac
 
 🧩 INSTRUCCIONES
 1) Explica el tema principal y por qué es relevante.
-2) Explica cada punto técnico con claridad (mantén términos en inglés si aplica).
-3) Resume en puntos clave.
-4) Conecta con temas relacionados.
-5) Cierra con un **resumen corto** (2–3 frases).
+2) Explica cada punto técnico con claridad (mantén términos en inglés o alemán si aplica) y usa puntos clave para una explicación comprensible y comleta.
+3) Resume conceptos principales en puntos clave.
+4) Conecta con temas relacionados, pero haciéndolo específico y en relación con las demás diapositivas, no tan general. Aporta información realmente útil y que ayude a comprender mejor el tema, no datos innecesarios.
+5) Cierra con un **resumen corto** (2–3 frases con el takeaway).
 
 📘 FORMATO DE SALIDA
 Devuelve **únicamente** un **objeto JSON válido** (sin texto adicional, sin comentarios).
@@ -49,7 +49,7 @@ NO copies literalmente el ejemplo; rellénalo con el contenido del slide.
   "titulo": "Tema o concepto central de la diapositiva",
   "explicacion_didactica": "Explicación completa y clara...",
   "puntos_clave": ["Idea 1", "Idea 2", "Idea 3"],
-  "conexiones": "Relaciones con otros temas",
+  "conexiones": "Relaciones con otros temas importantes",
   "resumen_corto": "Síntesis breve (2–3 frases)"
 }
 """
@@ -135,7 +135,7 @@ def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number:
         # Call Vision API
         response = openai_client.chat.completions.create(
             model="gpt-4o",
-            response_format={"type": "json_object"},  # <— AÑADIR
+            response_format={"type": "json_object"},  # <— NUEVO: fuerza JSON puro
             messages=[
                 {
                     "role": "user",
@@ -146,33 +146,56 @@ def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number:
                 }
             ],
             max_tokens=2000,
-            temperature=0  # <— BAJAR A 0
+            temperature=0  # <— recomendado para consistencia
         )
         
-        # Parse response
-        content = response.choices[0].message.content
+        # Parse response (normaliza a string y extrae JSON de forma robusta)
+        raw = response.choices[0].message.content
 
-        # Intento directo (porque response_format=json_object suele devolver JSON puro)
-        try:
-            explanation_data = json.loads(content)
-        except Exception:
-            # Fallbacks: bloques ```json ... ``` o ``` ... ```
-            import re
-            m = re.search(r"```json\s*(\{.*?\})\s*```", content, re.S) or \
-                re.search(r"```\s*(\{.*?\})\s*```", content, re.S) or \
-                re.search(r"(\{.*\})", content, re.S)
-            if not m:
-                # Último recurso: eliminar ecos del ejemplo {{ ... }} y meterlo como texto
-                cleaned = re.sub(r"\{\{[\s\S]*?\}\}", "", content).strip()
-                explanation_data = {
-                    "titulo": f"Slide {slide_number}",
-                    "explicacion_didactica": cleaned,
-                    "puntos_clave": [],
-                    "conexiones": "",
-                    "resumen_corto": ""
-                }
-            else:
-                explanation_data = json.loads(m.group(1))
+        # Algunos SDK/dev builds pueden devolver None o listas de partes
+        if raw is None:
+            # intenta recuperar de un posible atributo alternativo
+            raw = getattr(response.choices[0].message, "parsed", None)
+
+        if isinstance(raw, list):
+            content = "".join(
+                (p.get("text", "") if isinstance(p, dict) else str(p)) for p in raw
+            )
+        elif raw is None:
+            content = ""
+        else:
+            content = str(raw)
+
+        def extract_json_safe(s: str):
+            # 1) JSON puro
+            try:
+                return json.loads(s)
+            except Exception:
+                pass
+            # 2) bloque ```json ... ```
+            m = re.search(r"```json\s*(\{.*?\})\s*```", s, re.S)
+            if m:
+                return json.loads(m.group(1))
+            # 3) bloque ``` ... ```
+            m = re.search(r"```\s*(\{.*?\})\s*```", s, re.S)
+            if m:
+                return json.loads(m.group(1))
+            # 4) primer objeto { ... }
+            m = re.search(r"(\{.*\})", s, re.S)
+            if m:
+                return json.loads(m.group(1))
+            # 5) último recurso: limpia ecos de {{ ... }} y usa como explicación
+            cleaned = re.sub(r"\{\{[\s\S]*?\}\}", "", s).strip()
+            return {
+                "titulo": f"Slide {slide_number}",
+                "explicacion_didactica": cleaned,
+                "puntos_clave": [],
+                "conexiones": "",
+                "resumen_corto": ""
+            }
+
+        explanation_data = extract_json_safe(content)
+
         
         # === Normalización de esquema al nuevo formato ===
         # Si ya viene en el esquema nuevo, lo usamos tal cual:
@@ -229,9 +252,9 @@ def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number:
             "error": f"Error analyzing slide {slide_number}: {str(e)}"
         }
 
-def generate_pdf_report(slides: List[bytes], explanations: List[Dict], pdf_name: str) -> bytes:
+def generate_word_report(slides: List[bytes], explanations: List[Dict], pdf_name: str) -> bytes:
     """
-    Generate a PDF report with slides and explanations
+    Generate a Word document (.docx) report with slides and explanations in continuous format
 
     Args:
         slides: List of slide image bytes
@@ -239,77 +262,67 @@ def generate_pdf_report(slides: List[bytes], explanations: List[Dict], pdf_name:
         pdf_name: Original PDF name for the report
 
     Returns:
-        PDF bytes
+        Word document bytes
     """
-    # Create temporary file for PDF
-    tmp_pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
-    tmp_pdf_file.close()  # Close it so reportlab can write to it
+    # Create temporary file for Word document
+    tmp_docx_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
+    tmp_docx_file.close()
 
     # Keep track of temporary image files to clean up later
     temp_image_files = []
 
     try:
-        doc = SimpleDocTemplate(tmp_pdf_file.name, pagesize=A4, topMargin=0.5*inch, bottomMargin=0.5*inch)
+        # Create Word document
+        doc = Document()
 
-        # Get styles
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=18,
-            spaceAfter=20,
-            textColor=HexColor('#2E86AB'),
-            alignment=1  # Center alignment
-        )
+        # Set up styles
+        title_style = doc.styles.add_style('SlideTitle', WD_STYLE_TYPE.PARAGRAPH)
+        title_style.font.size = Pt(18)
+        title_style.font.bold = True
+        title_style.font.color.rgb = None  # Default color
+        title_style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        title_style.paragraph_format.space_after = Pt(12)
 
-        heading_style = ParagraphStyle(
-            'CustomHeading',
-            parent=styles['Heading2'],
-            fontSize=14,
-            spaceAfter=10,
-            textColor=HexColor('#A23B72'),
-        )
+        heading_style = doc.styles.add_style('SectionHeading', WD_STYLE_TYPE.PARAGRAPH)
+        heading_style.font.size = Pt(14)
+        heading_style.font.bold = True
+        heading_style.font.color.rgb = None
+        heading_style.paragraph_format.space_after = Pt(6)
 
-        normal_style = ParagraphStyle(
-            'CustomNormal',
-            parent=styles['Normal'],
-            fontSize=11,
-            spaceAfter=8,
-            leftIndent=20
-        )
-
-        # Build PDF content
-        content = []
+        normal_style = doc.styles.add_style('NormalText', WD_STYLE_TYPE.PARAGRAPH)
+        normal_style.font.size = Pt(11)
+        normal_style.paragraph_format.left_indent = Inches(0.25)
+        normal_style.paragraph_format.space_after = Pt(6)
 
         # Process each slide
         for i, (slide_bytes, explanation) in enumerate(zip(slides, explanations)):
             slide_num = i + 1
 
             # Slide title
-            content.append(Paragraph(f"Slide {slide_num}", title_style))
-            content.append(Spacer(1, 10))
+            title_para = doc.add_paragraph(f"Slide {slide_num}", style='SlideTitle')
 
             # Add slide image
             try:
-                # Create temporary image file that persists during PDF building
+                # Create temporary image file
                 img_tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
                 img_tmp.write(slide_bytes)
-                img_tmp.close()  # Close file so reportlab can read it
+                img_tmp.close()
 
                 temp_image_files.append(img_tmp.name)  # Track for cleanup
 
-                # Resize image to fit full page width (7.5 inches for A4 with margins)
-                slide_image = RLImage(img_tmp.name, width=7.5*inch, height=5.6*inch)
-                content.append(slide_image)
-                content.append(Spacer(1, 20))
+                # Add image to document (width: 6 inches, height: auto-maintain aspect ratio)
+                doc.add_picture(img_tmp.name, width=Inches(6))
+
+                # Add some space after image
+                doc.add_paragraph("")
+
             except Exception as e:
-                content.append(Paragraph(f"Error loading slide image: {str(e)}", styles['Normal']))
-                content.append(Spacer(1, 10))
+                error_para = doc.add_paragraph(f"Error loading slide image: {str(e)}", style='NormalText')
 
             # Add explanation
             if explanation["success"]:
                 exp_data = explanation["explanation"]
-                    
+
                 title = exp_data.get('titulo') or ""
                 exp_did = exp_data.get('explicacion_didactica') or ""
                 resumen = exp_data.get('resumen') or ""
@@ -320,60 +333,52 @@ def generate_pdf_report(slides: List[bytes], explanations: List[Dict], pdf_name:
                 explicacion = exp_did if exp_did.strip() else resumen
 
                 if title:
-                    content.append(Paragraph("📌 Título", heading_style))
-                    content.append(Paragraph(title, normal_style))
-                    content.append(Spacer(1, 10))
+                    doc.add_paragraph("📌 Título", style='SectionHeading')
+                    doc.add_paragraph(title, style='NormalText')
 
                 if explicacion:
-                    content.append(Paragraph("🧠 Explicación didáctica", heading_style))
-                    content.append(Paragraph(explicacion, normal_style))
-                    content.append(Spacer(1, 10))
+                    doc.add_paragraph("🧠 Explicación didáctica", style='SectionHeading')
+                    doc.add_paragraph(explicacion, style='NormalText')
 
                 if puntos:
-                    content.append(Paragraph("🎯 Puntos clave", heading_style))
+                    doc.add_paragraph("🎯 Puntos clave", style='SectionHeading')
                     for item in puntos:
-                        content.append(Paragraph(f"• {item}", normal_style))
-                    content.append(Spacer(1, 10))
+                        doc.add_paragraph(f"• {item}", style='NormalText')
 
                 if conex:
-                    content.append(Paragraph("🔗 Conexiones", heading_style))
-                    content.append(Paragraph(conex, normal_style))
-                    content.append(Spacer(1, 10))
+                    doc.add_paragraph("🔗 Conexiones", style='SectionHeading')
+                    doc.add_paragraph(conex, style='NormalText')
 
                 # Solo muestra 'Resumen' si es distinto de la explicación
                 if resumen and resumen.strip() != explicacion.strip():
-                    content.append(Paragraph("📝 Resumen", heading_style))
-                    content.append(Paragraph(resumen, normal_style))
-                    content.append(Spacer(1, 10))
+                    doc.add_paragraph("📝 Resumen", style='SectionHeading')
+                    doc.add_paragraph(resumen, style='NormalText')
 
                 # Solo muestra 'Resumen corto' si es distinto
                 if resumen_corto and resumen_corto.strip() not in {resumen.strip(), explicacion.strip()}:
-                    content.append(Paragraph("📝 Resumen corto", heading_style))
-                    content.append(Paragraph(resumen_corto, normal_style))
-                    content.append(Spacer(1, 10))
-
+                    doc.add_paragraph("📝 Resumen corto", style='SectionHeading')
+                    doc.add_paragraph(resumen_corto, style='NormalText')
 
             else:
-                content.append(Paragraph("❌ Error en el análisis", heading_style))
-                content.append(Paragraph(explanation.get('error', 'Error desconocido'), normal_style))
+                doc.add_paragraph("❌ Error en el análisis", style='SectionHeading')
+                doc.add_paragraph(explanation.get('error', 'Error desconocido'), style='NormalText')
 
-            # Add page break except for last slide
-            if i < len(slides) - 1:
-                content.append(PageBreak())
+            # Add page break between slides (optional - remove this line for truly continuous)
+            # doc.add_page_break()
 
-        # Build PDF
-        doc.build(content)
+        # Save the document
+        doc.save(tmp_docx_file.name)
 
-        # Read the generated PDF
-        with open(tmp_pdf_file.name, 'rb') as f:
-            pdf_bytes = f.read()
+        # Read the generated Word document
+        with open(tmp_docx_file.name, 'rb') as f:
+            docx_bytes = f.read()
 
-        return pdf_bytes
+        return docx_bytes
 
     finally:
         # Clean up temporary files
         try:
-            os.unlink(tmp_pdf_file.name)
+            os.unlink(tmp_docx_file.name)
         except:
             pass
 
@@ -403,8 +408,8 @@ def main():
         st.session_state.edited_explanations = None
     if 'uploaded_file_name' not in st.session_state:
         st.session_state.uploaded_file_name = None
-    if 'pdf_report' not in st.session_state:
-        st.session_state.pdf_report = None
+    if 'word_report' not in st.session_state:
+        st.session_state.word_report = None
     if 'undo_stack' not in st.session_state:
         st.session_state.undo_stack = []
     if 'redo_stack' not in st.session_state:
@@ -480,7 +485,7 @@ def main():
             # New file - clear previous results
             st.session_state.slides = None
             st.session_state.explanations = None
-            st.session_state.pdf_report = None
+            st.session_state.word_report = None
             st.session_state.uploaded_file_name = uploaded_file.name
             
             # Extract slides
@@ -527,7 +532,7 @@ def main():
             # Undo/Redo buttons
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
-                if st.button("↶ Undo (Ctrl+Z)", disabled=len(st.session_state.undo_stack) == 0):
+                if st.button("↶ Undo", disabled=len(st.session_state.undo_stack) == 0):
                     if st.session_state.undo_stack:
                         # Save current state to redo stack
                         st.session_state.redo_stack.append({
@@ -541,7 +546,7 @@ def main():
                         st.rerun()
 
             with col2:
-                if st.button("↷ Redo (Ctrl+Shift+Z)", disabled=len(st.session_state.redo_stack) == 0):
+                if st.button("↷ Redo", disabled=len(st.session_state.redo_stack) == 0):
                     if st.session_state.redo_stack:
                         # Save current state to undo stack
                         st.session_state.undo_stack.append({
@@ -553,6 +558,9 @@ def main():
                         st.session_state.slides = next_state['slides']
                         st.session_state.edited_explanations = next_state['edited_explanations']
                         st.rerun()
+
+            with col3:
+                st.caption("💡 Undo/Redo via buttons (keyboard shortcuts not supported in browser)")
 
             # Use edited explanations if available, otherwise use original
             current_explanations = st.session_state.edited_explanations or st.session_state.explanations
@@ -597,8 +605,10 @@ def main():
                     st.subheader(f"🖼️ Slide {slide_num}")
                     st.image(slide_bytes, caption=f"Slide {slide_num}", width='stretch')
 
-                    # Add some space
+                    # Add more space between slide and explanation
                     st.markdown("---")
+                    st.markdown("")  # Extra space
+                    st.markdown("")  # Extra space
 
                     # Display explanation below the image
                     st.subheader("🔍 AI Analysis")
@@ -620,57 +630,41 @@ def main():
                                 key=f"title_{i}"
                             )
 
-                            # Summary
-                            new_resumen = st.text_area(
-                                "📝 Resumen:",
-                                value=exp_data.get('resumen', ''),
-                                key=f"resumen_{i}",
+                            # Explicacion didactica
+                            new_explicacion_didactica = st.text_area(
+                                "🧠 Explicación didáctica:",
+                                value=exp_data.get('explicacion_didactica', ''),
+                                key=f"explicacion_{i}",
                                 height=100
                             )
 
-                            # Key content
-                            st.markdown("**🎯 Contenido Clave:**")
-                            new_contenido_clave = []
-                            if exp_data.get('contenido_clave'):
-                                for j, item in enumerate(exp_data['contenido_clave']):
+                            # Puntos clave
+                            st.markdown("**🎯 Puntos clave:**")
+                            new_puntos_clave = []
+                            if exp_data.get('puntos_clave'):
+                                for j, item in enumerate(exp_data['puntos_clave']):
                                     new_item = st.text_input(
                                         f"Item {j+1}:",
                                         value=item,
-                                        key=f"content_{i}_{j}"
+                                        key=f"punto_{i}_{j}"
                                     )
-                                    new_contenido_clave.append(new_item)
+                                    new_puntos_clave.append(new_item)
 
-                            # Visual elements
-                            st.markdown("**👁️ Elementos Visuales:**")
-                            new_elementos_visuales = []
-                            if exp_data.get('elementos_visuales'):
-                                for j, item in enumerate(exp_data['elementos_visuales']):
-                                    new_item = st.text_input(
-                                        f"Elemento {j+1}:",
-                                        value=item,
-                                        key=f"visual_{i}_{j}"
-                                    )
-                                    new_elementos_visuales.append(new_item)
-
-                            # Context
-                            new_contexto = st.text_area(
-                                "🎯 Contexto:",
-                                value=exp_data.get('contexto', ''),
-                                key=f"contexto_{i}",
+                            # Conexiones
+                            new_conexiones = st.text_area(
+                                "🔗 Conexiones:",
+                                value=exp_data.get('conexiones', ''),
+                                key=f"conexiones_{i}",
                                 height=80
                             )
 
-                            # Insights
-                            st.markdown("**💡 Insights:**")
-                            new_insights = []
-                            if exp_data.get('insights'):
-                                for j, item in enumerate(exp_data['insights']):
-                                    new_item = st.text_input(
-                                        f"Insight {j+1}:",
-                                        value=item,
-                                        key=f"insight_{i}_{j}"
-                                    )
-                                    new_insights.append(new_item)
+                            # Resumen corto
+                            new_resumen_corto = st.text_area(
+                                "📝 Resumen corto:",
+                                value=exp_data.get('resumen_corto', ''),
+                                key=f"resumen_corto_{i}",
+                                height=60
+                            )
 
                             # Save button
                             if st.button("💾 Save Changes", key=f"save_{i}"):
@@ -680,15 +674,14 @@ def main():
                                     'edited_explanations': [exp.copy() for exp in current_explanations]
                                 })
 
-                                # Update the explanation
+                                # Update the explanation with new schema
                                 updated_exp = explanation.copy()
                                 updated_exp["explanation"] = {
                                     'titulo': new_title,
-                                    'resumen': new_resumen,
-                                    'contenido_clave': new_contenido_clave,
-                                    'elementos_visuales': new_elementos_visuales,
-                                    'contexto': new_contexto,
-                                    'insights': new_insights
+                                    'explicacion_didactica': new_explicacion_didactica,
+                                    'puntos_clave': new_puntos_clave,
+                                    'conexiones': new_conexiones,
+                                    'resumen_corto': new_resumen_corto
                                 }
 
                                 # Update edited explanations
@@ -774,30 +767,30 @@ def main():
                 )
             
             with col2:
-                # PDF Export
-                if st.button("📄 Generate PDF Report", key="generate_pdf"):
-                    with st.spinner("🔄 Generating PDF report... This may take a moment depending on the number of slides."):
+                # Word Document Export
+                if st.button("📄 Generate Word Report", key="generate_word"):
+                    with st.spinner("🔄 Generating Word document... This may take a moment depending on the number of slides."):
                         try:
                             # Use edited explanations if available, otherwise use original
                             explanations_to_use = st.session_state.edited_explanations or st.session_state.explanations
-                            st.session_state.pdf_report = generate_pdf_report(
+                            st.session_state.word_report = generate_word_report(
                                 st.session_state.slides,
                                 explanations_to_use,
                                 st.session_state.uploaded_file_name
                             )
-                            st.success("✅ PDF report generated successfully!")
+                            st.success("✅ Word document generated successfully!")
 
                         except Exception as e:
-                            st.error(f"❌ Error generating PDF: {str(e)}")
-                
-                # Show PDF download button if report is generated
-                if st.session_state.pdf_report is not None:
+                            st.error(f"❌ Error generating Word document: {str(e)}")
+
+                # Show Word download button if report is generated
+                if st.session_state.word_report is not None:
                     st.download_button(
-                        label="📥 Download PDF Report",
-                        data=st.session_state.pdf_report,
-                        file_name=f"{st.session_state.uploaded_file_name.replace('.pdf', '')}_analysis_report.pdf",
-                        mime="application/pdf",
-                        key="pdf_download"
+                        label="📥 Download Word Report",
+                        data=st.session_state.word_report,
+                        file_name=f"{st.session_state.uploaded_file_name.replace('.pdf', '')}_analysis_report.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="word_download"
                     )
 
 if __name__ == "__main__":
