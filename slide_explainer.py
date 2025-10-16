@@ -108,7 +108,7 @@ def extract_slides_from_pdf(pdf_file) -> List[bytes]:
         st.error(f"Error extracting slides from PDF: {str(e)}")
         return []
 
-def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number: int, custom_prompt: str = None) -> Dict[str, Any]:
+def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number: int, custom_prompt: str = None, language: str = "Spanish") -> Dict[str, Any]:
     """
     Generate explanation for a single slide using OpenAI Vision API
     
@@ -132,6 +132,10 @@ def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number:
             explanation_prompt = custom_prompt.replace("{slide_number}", str(slide_number))
         else:
             explanation_prompt = PROMPT_TEMPLATE.replace("{slide_number}", str(slide_number))
+        
+        # Add language instruction
+        if language.lower() != "spanish":
+            explanation_prompt += f"\n\nIMPORTANT: Provide the output in {language}."
 
         
         # Call Vision API
@@ -450,6 +454,8 @@ def main():
         st.session_state.redo_stack = []
     if 'current_slide_view' not in st.session_state:
         st.session_state.current_slide_view = None
+    if 'selected_language' not in st.session_state:
+        st.session_state.selected_language = "Spanish"
     
     # Sidebar for configuration
     with st.sidebar:
@@ -475,6 +481,22 @@ def main():
                 value=PROMPT_TEMPLATE,
                 help="Use {slide_number} as placeholder for slide number"
             )
+        
+        # Language selection
+        st.subheader("🌍 Analysis Language")
+        languages = [
+            "Spanish", "English", "French", "German", "Italian", "Portuguese",
+            "Chinese", "Japanese", "Korean", "Arabic", "Russian", "Hindi",
+            "Dutch", "Swedish", "Norwegian", "Danish", "Finnish", "Polish",
+            "Czech", "Hungarian", "Romanian", "Greek", "Turkish", "Hebrew",
+            "Thai", "Vietnamese", "Indonesian", "Malay", "Tagalog", "Swahili"
+        ]
+        selected_language = st.selectbox(
+            "Choose analysis language:",
+            options=languages,
+            index=0,  # Default to Spanish
+            help="Language for AI analysis and explanations"
+        )
     
     st.markdown("""
     Upload a PDF presentation and get detailed explanations for each slide using AI vision analysis.
@@ -547,7 +569,7 @@ def main():
                     status_text.text(f"Analyzing slide {slide_num} of {len(st.session_state.slides)}...")
 
                     # Analyze slide
-                    explanation = explain_slide(slide_bytes, openai_client, slide_num, custom_prompt)
+                    explanation = explain_slide(slide_bytes, openai_client, slide_num, custom_prompt, selected_language)
                     explanations.append(explanation)
 
                     # Update progress
