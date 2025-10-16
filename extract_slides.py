@@ -39,8 +39,8 @@ def extract_slides(input_pdf_path, output_pdf_path, start_page, end_page):
         print(f"❌ Error: {str(e)}")
 
 if __name__ == "__main__":
-    input_pdf = "/Users/macbookpro/Downloads/bdl_1.pdf"
-    output_pdf = "/Users/macbookpro/all_chatbots/diapos_ai/test_slides_15_20.pdf"
+    input_pdf = "/Users/danilomonge/Desktop/Proyecto Diapos/diapos_ai/test_slides_15_20.pdf"
+    output_pdf = "/Users/danilomonge/Desktop/Proyecto Diapos/diapos_ai/test_slides_15_20_extract.pdf"
     
     # Extract pages 15-20 (0-indexed: 14-19)
     extract_slides(input_pdf, output_pdf, 14, 19)
