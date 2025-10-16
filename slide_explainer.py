@@ -28,19 +28,19 @@ sin extenderse demasiado ni omitir ningún detalle importante.
 Incluye ejemplos o analogías cuando ayuden a comprender mejor.
 Al final, agrega un **resumen corto** con lo más importante de toda la explicación.
 
-🎯 OBJETIVO GENERAL
+OBJETIVO GENERAL
 - Que sea **profunda pero comprensible**, con rigor técnico y tono didáctico.
 - Que ayude a **aprender de forma rápida**.
 - Que combine explicación fluida con **puntos clave**.
 
-🧩 INSTRUCCIONES
+INSTRUCCIONES
 1) Explica el tema principal y por qué es relevante.
 2) Explica cada punto técnico con claridad (mantén términos en inglés o alemán si aplica) y usa puntos clave para una explicación comprensible y comleta.
 3) Resume conceptos principales en puntos clave.
 4) Conecta con temas relacionados, pero haciéndolo específico y en relación con las demás diapositivas, no tan general. Aporta información realmente útil y que ayude a comprender mejor el tema, no datos innecesarios.
 5) Cierra con un **resumen corto** (2–3 frases con el takeaway).
 
-📘 FORMATO DE SALIDA
+FORMATO DE SALIDA
 Devuelve **únicamente** un **objeto JSON válido** (sin texto adicional, sin comentarios).
 NO copies literalmente el ejemplo; rellénalo con el contenido del slide.
 
@@ -126,10 +126,12 @@ def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number:
         image_url = f"data:image/png;base64,{image_base64}"
         
         # Use custom prompt if provided, otherwise use default
+        # IMPORTANT: Avoid str.format here because PROMPT_TEMPLATE contains JSON braces
+        # which would be interpreted as format fields. We only want to substitute {slide_number}.
         if custom_prompt:
             explanation_prompt = custom_prompt.replace("{slide_number}", str(slide_number))
         else:
-            explanation_prompt = PROMPT_TEMPLATE.format(slide_number=slide_number)
+            explanation_prompt = PROMPT_TEMPLATE.replace("{slide_number}", str(slide_number))
 
         
         # Call Vision API
@@ -167,28 +169,60 @@ def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number:
             content = str(raw)
 
         def extract_json_safe(s: str):
+            # Clean input first
+            s = s.strip()
+            
             # 1) JSON puro
             try:
                 return json.loads(s)
             except Exception:
                 pass
-            # 2) bloque ```json ... ```
+                
+            # 2) Try to fix malformed JSON that starts with quotes
+            if s.startswith('"') and not s.startswith('{"'):
+                try:
+                    # Try adding opening brace
+                    fixed = "{" + s
+                    return json.loads(fixed)
+                except Exception:
+                    try:
+                        # Try removing leading quotes and finding JSON-like content
+                        cleaned = s.lstrip('\n "')
+                        if ':' in cleaned:
+                            fixed = '{"' + cleaned
+                            return json.loads(fixed)
+                    except Exception:
+                        pass
+                    
+            # 3) bloque ```json ... ```
             m = re.search(r"```json\s*(\{.*?\})\s*```", s, re.S)
             if m:
-                return json.loads(m.group(1))
-            # 3) bloque ``` ... ```
+                try:
+                    return json.loads(m.group(1))
+                except Exception:
+                    pass
+                    
+            # 4) bloque ``` ... ```
             m = re.search(r"```\s*(\{.*?\})\s*```", s, re.S)
             if m:
-                return json.loads(m.group(1))
-            # 4) primer objeto { ... }
+                try:
+                    return json.loads(m.group(1))
+                except Exception:
+                    pass
+                    
+            # 5) primer objeto { ... }
             m = re.search(r"(\{.*\})", s, re.S)
             if m:
-                return json.loads(m.group(1))
-            # 5) último recurso: limpia ecos de {{ ... }} y usa como explicación
+                try:
+                    return json.loads(m.group(1))
+                except Exception:
+                    pass
+                    
+            # 6) último recurso: limpia ecos de {{ ... }} y usa como explicación
             cleaned = re.sub(r"\{\{[\s\S]*?\}\}", "", s).strip()
             return {
                 "titulo": f"Slide {slide_number}",
-                "explicacion_didactica": cleaned,
+                "explicacion_didactica": cleaned if cleaned else s,
                 "puntos_clave": [],
                 "conexiones": "",
                 "resumen_corto": ""
