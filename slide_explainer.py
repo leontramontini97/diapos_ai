@@ -18,6 +18,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.style import WD_STYLE_TYPE
 import tempfile
 import re
+import genanki #libreria para generar ankis
+import random
 
 
 def get_prompt(language: str = "Spanish") -> str:
@@ -45,6 +47,7 @@ INSTRUCCIONES
 4) Conecta con temas relacionados, pero haciéndolo específico y en relación con las demás diapositivas, no tan general. Aporta información realmente útil y que ayude a comprender mejor el tema, no datos innecesarios.
 5) Cierra con un **resumen corto** (2–3 frases con el takeaway).
 6) **SIEMPRE** proporciona contenido completo, no dejes campos vacíos o con "N/A".
+7) Genera 3 ankis de conceptos importantes de aprender e interiorizar en esta diapositiva.
 
 FORMATO DE SALIDA
 Devuelve **únicamente** un **objeto JSON válido** (sin texto adicional, sin comentarios).
@@ -56,7 +59,12 @@ NO copies literalmente el ejemplo; rellénalo con el contenido del slide.
   "explicacion_didactica": ["Punto 1: Detalle completo...", "Punto 2: Detalle completo...", "Punto 3: ..."],
   "puntos_clave": ["Idea 1", "Idea 2", "Idea 3"],
   "conexiones": "Relaciones con otros temas importantes",
-  "resumen_corto": "Síntesis breve (2–3 frases)"
+  "resumen_corto": "Síntesis breve (2–3 frases)",
+  "anki_cards": [
+    {{"pregunta": "...", "respuesta": "..."}},
+    {{"pregunta": "...", "respuesta": "..."}},
+    {{"pregunta": "...", "respuesta": "..."}}
+  ]
 }}
 """
 
@@ -245,7 +253,8 @@ def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number:
                 "explicacion_didactica": explanation_data.get("explicacion_didactica", ""),
                 "puntos_clave": explanation_data.get("puntos_clave", []) or [],
                 "conexiones": explanation_data.get("conexiones", ""),
-                "resumen_corto": explanation_data.get("resumen_corto", "")
+                "resumen_corto": explanation_data.get("resumen_corto", ""),
+                "anki_cards": explanation_data.get("anki_cards", []) or []
             }
         else:
             # Fallback desde el esquema antiguo
@@ -274,7 +283,8 @@ def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number:
                 "explicacion_didactica": explicacion_didactica_new or "Explicación generada automáticamente.",
                 "puntos_clave": contenido_clave_old if isinstance(contenido_clave_old, list) else [],
                 "conexiones": contexto_old if isinstance(contexto_old, str) else "",
-                "resumen_corto": resumen_old if isinstance(resumen_old, str) else ""
+                "resumen_corto": resumen_old if isinstance(resumen_old, str) else "",
+                "anki_cards": explanation_data.get("anki_cards", []) or []
             }
 
         return {
@@ -444,6 +454,100 @@ def generate_word_report(slides: List[bytes], explanations: List[Dict], pdf_name
                 os.unlink(img_file)
             except:
                 pass
+
+def generate_anki_export(explanations: List[Dict], pdf_name: Optional[str]) -> bytes:
+    """
+    Generate Anki deck (.apkg) file from slide explanations using genanki
+    
+    Args:
+        explanations: List of explanation dictionaries containing anki_cards
+        pdf_name: Original PDF name for context
+        
+    Returns:
+        Bytes of the .apkg file
+    """
+    if not explanations:
+        return b""
+    
+    # Create Anki model (card template)
+    anki_model = genanki.Model(
+        1607392319,  # Hardcoded unique model ID
+        'PDF Slide Explainer Model',
+        fields=[
+            {'name': 'Question'},
+            {'name': 'Answer'},
+            {'name': 'Source'},
+        ],
+        templates=[
+            {
+                'name': 'Card 1',
+                'qfmt': '{{Question}}',
+                'afmt': '{{FrontSide}}<hr id="answer">{{Answer}}<br><br><small style="color: #666;">{{Source}}</small>',
+            },
+        ],
+        css="""
+        .card {
+            font-family: arial;
+            font-size: 20px;
+            text-align: center;
+            color: black;
+            background-color: white;
+        }
+        .cloze {
+            font-weight: bold;
+            color: blue;
+        }
+        """
+    )
+    
+    # Create deck
+    deck_name = f"PDF Slide Explainer - {pdf_name}" if pdf_name else "PDF Slide Explainer"
+    anki_deck = genanki.Deck(
+        2059400110,  # Hardcoded unique deck ID
+        deck_name
+    )
+    
+    # Add notes to deck
+    card_count = 0
+    for i, explanation in enumerate(explanations):
+        if explanation.get("success") and explanation.get("explanation"):
+            exp_data = explanation["explanation"]
+            anki_cards = exp_data.get("anki_cards", [])
+            slide_title = exp_data.get('titulo', f'Slide {i + 1}')
+            
+            if anki_cards:
+                for card in anki_cards:
+                    if isinstance(card, dict) and 'pregunta' in card and 'respuesta' in card:
+                        # Create Anki note
+                        note = genanki.Note(
+                            model=anki_model,
+                            fields=[
+                                card['pregunta'].strip(),
+                                card['respuesta'].strip(),
+                                f"Slide {i + 1}: {slide_title}"
+                            ]
+                        )
+                        anki_deck.add_note(note)
+                        card_count += 1
+    
+    # Generate .apkg file in memory
+    package = genanki.Package(anki_deck)
+    
+    # Create temporary file to get bytes
+    with tempfile.NamedTemporaryFile(suffix='.apkg', delete=False) as tmp_file:
+        package.write_to_file(tmp_file.name)
+        
+        # Read the file content
+        with open(tmp_file.name, 'rb') as f:
+            apkg_bytes = f.read()
+        
+        # Clean up temp file
+        try:
+            os.unlink(tmp_file.name)
+        except:
+            pass
+    
+    return apkg_bytes
 
 def main():
     """Main Streamlit application"""
@@ -1305,6 +1409,22 @@ def main():
                                 st.markdown("<h4 style='color: #ffffff; margin-bottom: 12px; margin-top: 20px; font-weight: 600;'><span style='color: #607D8B;'>📝</span> Resumen corto:</h4>", unsafe_allow_html=True)
                                 st.markdown(f"<p style='color: #ffffff; line-height: 1.6; margin-bottom: 15px; font-style: italic;'>{resumen_corto_ui}</p>", unsafe_allow_html=True)
 
+                            # Anki cards section
+                            anki_cards_ui = exp_data.get('anki_cards') or []
+                            if anki_cards_ui:
+                                st.markdown("<h4 style='color: #ffffff; margin-bottom: 12px; margin-top: 20px; font-weight: 600;'><span style='color: #FFA726;'>🃏</span> Tarjetas Anki:</h4>", unsafe_allow_html=True)
+                                for idx, card in enumerate(anki_cards_ui, 1):
+                                    if isinstance(card, dict) and 'pregunta' in card and 'respuesta' in card:
+                                        st.markdown(f"""
+                                        <div style='background: linear-gradient(135deg, rgba(255,167,38,0.1), rgba(255,167,38,0.05)); 
+                                                    border-left: 3px solid #FFA726; padding: 15px; margin: 10px 0; border-radius: 8px;'>
+                                            <p style='color: #FFA726; font-weight: 600; margin-bottom: 8px;'>📋 Pregunta {idx}:</p>
+                                            <p style='color: #ffffff; margin-bottom: 12px; font-style: italic;'>{card['pregunta']}</p>
+                                            <p style='color: #FFA726; font-weight: 600; margin-bottom: 8px;'>💡 Respuesta:</p>
+                                            <p style='color: #ffffff; margin-bottom: 0;'>{card['respuesta']}</p>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+
                             # Insights section
                             insights_ui = exp_data.get('insights') or []
                             if insights_ui:
@@ -1399,7 +1519,7 @@ def main():
             # Export options
             st.markdown("**📤 Export Results**")  # Changed from subheader to markdown for less space
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             
             with col1:
                 # JSON Export
@@ -1537,6 +1657,41 @@ def main():
                             file_name="analysis_report.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             key="word_download"
+                        )
+            
+            with col3:
+                # Anki Cards Export
+                if st.button("🃏 Generate Anki Cards", key="generate_anki"):
+                    with st.spinner("🔄 Generating Anki cards..."):
+                        try:
+                            # Use edited explanations if available, otherwise use original
+                            explanations_to_use = st.session_state.edited_explanations or st.session_state.explanations
+                            anki_content = generate_anki_export(
+                                explanations_to_use,
+                                st.session_state.uploaded_file_name
+                            )
+                            st.session_state.anki_cards_export = anki_content
+                            st.success("✅ Anki cards generated successfully!")
+                        except Exception as e:
+                            st.error(f"❌ Error generating Anki cards: {str(e)}")
+                
+                # Show Anki download button if cards are generated
+                if hasattr(st.session_state, 'anki_cards_export') and st.session_state.anki_cards_export:
+                    if st.session_state.uploaded_file_name:
+                        st.download_button(
+                            label="📥 Download Anki Cards",
+                            data=st.session_state.anki_cards_export,
+                            file_name=f"{st.session_state.uploaded_file_name.replace('.pdf', '')}_anki_cards.apkg",
+                            mime="application/octet-stream",
+                            key="anki_download"
+                        )
+                    else:
+                        st.download_button(
+                            label="📥 Download Anki Cards",
+                            data=st.session_state.anki_cards_export,
+                            file_name="anki_cards.apkg",
+                            mime="application/octet-stream",
+                            key="anki_download"
                         )
 
 if __name__ == "__main__":
