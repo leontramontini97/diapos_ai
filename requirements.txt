@@ -22,5 +22,5 @@ python-docx>=1.1.0
 # Data Processing
 python-dateutil>=2.8.2
 
-# Standard libraries (included in Python)
-# json, base64, os, typing, io, tempfile
+genanki
+
