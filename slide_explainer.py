@@ -20,6 +20,7 @@ import tempfile
 import re
 import genanki #libreria para generar ankis
 import random
+import difflib
 
 
 def get_prompt(language: str = "Spanish") -> str:
@@ -458,17 +459,17 @@ def generate_word_report(slides: List[bytes], explanations: List[Dict], pdf_name
 def generate_anki_export(explanations: List[Dict], pdf_name: Optional[str]) -> bytes:
     """
     Generate Anki deck (.apkg) file from slide explanations using genanki
-    
+
     Args:
         explanations: List of explanation dictionaries containing anki_cards
         pdf_name: Original PDF name for context
-        
+
     Returns:
         Bytes of the .apkg file
     """
     if not explanations:
         return b""
-    
+
     # Create Anki model (card template)
     anki_model = genanki.Model(
         1607392319,  # Hardcoded unique model ID
@@ -499,14 +500,14 @@ def generate_anki_export(explanations: List[Dict], pdf_name: Optional[str]) -> b
         }
         """
     )
-    
+
     # Create deck
     deck_name = f"PDF Slide Explainer - {pdf_name}" if pdf_name else "PDF Slide Explainer"
     anki_deck = genanki.Deck(
         2059400110,  # Hardcoded unique deck ID
         deck_name
     )
-    
+
     # Add notes to deck
     card_count = 0
     for i, explanation in enumerate(explanations):
@@ -514,7 +515,7 @@ def generate_anki_export(explanations: List[Dict], pdf_name: Optional[str]) -> b
             exp_data = explanation["explanation"]
             anki_cards = exp_data.get("anki_cards", [])
             slide_title = exp_data.get('titulo', f'Slide {i + 1}')
-            
+
             if anki_cards:
                 for card in anki_cards:
                     if isinstance(card, dict) and 'pregunta' in card and 'respuesta' in card:
@@ -529,25 +530,77 @@ def generate_anki_export(explanations: List[Dict], pdf_name: Optional[str]) -> b
                         )
                         anki_deck.add_note(note)
                         card_count += 1
-    
+
     # Generate .apkg file in memory
     package = genanki.Package(anki_deck)
-    
+
     # Create temporary file to get bytes
     with tempfile.NamedTemporaryFile(suffix='.apkg', delete=False) as tmp_file:
         package.write_to_file(tmp_file.name)
-        
+
         # Read the file content
         with open(tmp_file.name, 'rb') as f:
             apkg_bytes = f.read()
-        
+
         # Clean up temp file
         try:
             os.unlink(tmp_file.name)
         except:
             pass
-    
+
     return apkg_bytes
+
+def generate_quiz(anki_cards_list: List[Dict]) -> List[Dict]:
+    """
+    Generate a quiz with 20 multiple choice questions from Anki cards
+
+    Args:
+        anki_cards_list: List of all anki cards from all slides
+
+    Returns:
+        List of quiz questions, each with question, options, correct_answer
+    """
+    if not anki_cards_list:
+        return []
+
+    # Filter valid cards
+    valid_cards = [card for card in anki_cards_list if isinstance(card, dict) and 'pregunta' in card and 'respuesta' in card]
+
+    if len(valid_cards) < 4:  # Need at least 4 for multiple choice
+        return []
+
+    # Select up to 20 questions randomly
+    num_questions = min(20, len(valid_cards))
+    selected_cards = random.sample(valid_cards, num_questions)
+
+    quiz_questions = []
+
+    for card in selected_cards:
+        question = card['pregunta'].strip()
+        correct_answer = card['respuesta'].strip()
+
+        # Get all other answers for distractors
+        other_answers = [c['respuesta'].strip() for c in valid_cards if c != card and c['respuesta'].strip() != correct_answer]
+
+        if len(other_answers) < 3:
+            continue  # Skip if not enough distractors
+
+        # Find 3 most similar answers using difflib
+        similarities = [(ans, difflib.SequenceMatcher(None, correct_answer, ans).ratio()) for ans in other_answers]
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        distractors = [sim[0] for sim in similarities[:3]]
+
+        # Create options: correct + 3 distractors, shuffled
+        options = [correct_answer] + distractors
+        random.shuffle(options)
+
+        quiz_questions.append({
+            'question': question,
+            'options': options,
+            'correct_answer': correct_answer
+        })
+
+    return quiz_questions
 
 def main():
     """Main Streamlit application"""
@@ -1518,32 +1571,10 @@ def main():
             
             # Export options
             st.markdown("**📤 Export Results**")  # Changed from subheader to markdown for less space
-            
+
             col1, col2, col3 = st.columns(3)
-            
+
             with col1:
-                # JSON Export
-                export_data = {
-                    "pdf_name": st.session_state.uploaded_file_name,
-                    "total_slides": len(st.session_state.slides),
-                    "analysis_timestamp": str(datetime.now()),
-                    "explanations": st.session_state.explanations
-                }
-                
-                export_json = json.dumps(export_data, indent=2, ensure_ascii=False)
-                
-                if st.session_state.uploaded_file_name:
-                    st.download_button(
-                        label="📥 Download Analysis as JSON",
-                        data=export_json,
-                        file_name=f"{st.session_state.uploaded_file_name.replace('.pdf', '')}_analysis.json",
-                        mime="application/json",
-                        key="json_download"
-                    )
-                else:
-                    st.warning("No file name available for JSON export")
-            
-            with col2:
                 # Word Document Export
                 if st.button("📄 Generate Word Report", key="generate_word"):
                     with st.spinner("🔄 Generating Word document... This may take a moment depending on the number of slides."):
@@ -1658,8 +1689,8 @@ def main():
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             key="word_download"
                         )
-            
-            with col3:
+
+            with col2:
                 # Anki Cards Export
                 if st.button("🃏 Generate Anki Cards", key="generate_anki"):
                     with st.spinner("🔄 Generating Anki cards..."):
@@ -1674,7 +1705,7 @@ def main():
                             st.success("✅ Anki cards generated successfully!")
                         except Exception as e:
                             st.error(f"❌ Error generating Anki cards: {str(e)}")
-                
+
                 # Show Anki download button if cards are generated
                 if hasattr(st.session_state, 'anki_cards_export') and st.session_state.anki_cards_export:
                     if st.session_state.uploaded_file_name:
@@ -1693,6 +1724,133 @@ def main():
                             mime="application/octet-stream",
                             key="anki_download"
                         )
+
+            with col3:
+                # Quiz Generation
+                if st.button("🧠 Generate Quiz", key="generate_quiz"):
+                    with st.spinner("🔄 Generating quiz..."):
+                        try:
+                            # Use edited explanations if available, otherwise use original
+                            explanations_to_use = st.session_state.edited_explanations or st.session_state.explanations
+
+                            # Collect all anki cards
+                            all_anki_cards = []
+                            for explanation in explanations_to_use:
+                                if explanation.get("success") and explanation.get("explanation"):
+                                    anki_cards = explanation["explanation"].get("anki_cards", [])
+                                    all_anki_cards.extend(anki_cards)
+
+                            if not all_anki_cards:
+                                st.error("❌ No Anki cards available to generate quiz")
+                            else:
+                                quiz_questions = generate_quiz(all_anki_cards)
+                                if not quiz_questions:
+                                    st.error("❌ Not enough Anki cards to generate quiz (need at least 4)")
+                                else:
+                                    # Clear previous quiz answer states
+                                    keys_to_clear = [key for key in st.session_state.keys() if isinstance(key, str) and (key.startswith('quiz_answer_selected_') or key.startswith('quiz_selected_option_'))]
+                                    for key in keys_to_clear:
+                                        del st.session_state[key]
+
+                                    st.session_state.quiz_questions = quiz_questions
+                                    st.session_state.quiz_current_index = 0
+                                    st.session_state.quiz_score = 0
+                                    st.session_state.quiz_show_feedback = False
+                                    st.success(f"✅ Quiz generated with {len(quiz_questions)} questions!")
+
+                        except Exception as e:
+                            st.error(f"❌ Error generating quiz: {str(e)}")
+
+            # Quiz Section (below all exports)
+            if 'quiz_questions' in st.session_state and st.session_state.quiz_questions:
+                st.markdown("---")
+                st.markdown("## 🧠 Interactive Quiz")
+
+                quiz_questions = st.session_state.quiz_questions
+                current_index = st.session_state.quiz_current_index
+
+                if current_index < len(quiz_questions):
+                    question = quiz_questions[current_index]
+
+                    st.markdown(f"**Question {current_index + 1} of {len(quiz_questions)}**")
+                    st.markdown(f"### {question['question']}")
+
+                    # Options as buttons in 2 columns
+                    cols = st.columns(2)
+                    selected_option = None
+
+                    # Check if answer was already selected for this question
+                    answer_selected = st.session_state.get(f"quiz_answer_selected_{current_index}", False)
+                    selected_option = st.session_state.get(f"quiz_selected_option_{current_index}", None)
+                    is_correct = selected_option == question['correct_answer'] if selected_option else None
+
+                    for i, option in enumerate(question['options']):
+                        col_idx = i % 2
+                        with cols[col_idx]:
+                            # Disable buttons if answer was already selected
+                            button_disabled = answer_selected
+
+                            # Create button label with visual feedback
+                            button_label = f"**{chr(65+i)}) {option}**"
+
+                            if answer_selected:
+                                if option == question['correct_answer']:
+                                    button_label = f"**{chr(65+i)}) {option}** ✅"
+                                elif option == selected_option and not is_correct:
+                                    button_label = f"**{chr(65+i)}) {option}** ❌"
+
+                            if st.button(button_label, key=f"quiz_option_{i}_{current_index}", disabled=button_disabled):
+                                if not answer_selected:  # Only process if not already answered
+                                    selected_option = option
+                                    st.session_state[f"quiz_selected_option_{current_index}"] = selected_option
+                                    st.session_state[f"quiz_answer_selected_{current_index}"] = True
+                                    st.rerun()  # Immediate re-run to disable buttons instantly
+
+                    if selected_option:
+                        if is_correct:
+                            st.session_state.quiz_score += 1
+                            st.success(f"Correct! The answer is: {question['correct_answer']}", icon="✅")
+                        else:
+                            st.error(f"Incorrect. The correct answer is: {question['correct_answer']}", icon="❌")
+
+                        # Wait 3 seconds
+                        import time
+                        time.sleep(3)
+
+                        # Move to next question
+                        st.session_state.quiz_current_index += 1
+                        st.rerun()
+
+                else:
+                    # Quiz finished
+                    score = st.session_state.quiz_score
+                    total = len(quiz_questions)
+                    percentage = (score / total) * 100
+
+                    st.markdown("## 🎉 Quiz Completed!")
+                    st.markdown(f"**Score: {score}/{total} ({percentage:.1f}%)**")
+
+                    if percentage >= 80:
+                        st.success("Excellent work! 🎊")
+                    elif percentage >= 60:
+                        st.info("Good work, keep practicing 📚")
+                    else:
+                        st.warning("You need more practice. You can do it! 💪")
+
+                    if st.button("🔄 Take Quiz Again"):
+                        # Reset quiz and clear all quiz-related session state
+                        keys_to_clear = [key for key in st.session_state.keys() if isinstance(key, str) and (
+                            key.startswith('quiz_answer_selected_') or
+                            key.startswith('quiz_selected_option_')
+                        )]
+                        for key in keys_to_clear:
+                            del st.session_state[key]
+
+                        # Re-initialize quiz state but keep the questions
+                        st.session_state.quiz_current_index = 0
+                        st.session_state.quiz_score = 0
+                        st.session_state.quiz_show_feedback = False
+                        st.rerun()
 
 if __name__ == "__main__":
     main()
