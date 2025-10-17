@@ -20,9 +20,12 @@ import tempfile
 import re
 
 
-# === Prompt template por defecto ===
-PROMPT_TEMPLATE = """\
-Hazme una explicación **completa, clara y dinámica** sobre este texto.
+def get_prompt(language: str = "Spanish") -> str:
+    """Get the prompt template adapted for the specified language"""
+    language_instruction = f"\n- Esta explicación debe ser escrita en {language}.\n"
+    
+    return f"""\
+Hazme una explicación **completa, clara y dinámica** sobre este texto.{language_instruction}
 Debe permitir al lector **entender todo el contenido técnico de manera fácil y ordenada**,
 sin extenderse demasiado ni omitir ningún detalle importante.
 Incluye ejemplos o analogías cuando ayuden a comprender mejor.
@@ -33,11 +36,11 @@ OBJETIVO GENERAL
 - Que ayude a **aprender de forma rápida**.
 - Que combine explicación fluida con **puntos clave**.
 - **IMPORTANTE:** Siempre genera texto explicativo completo, incluso si la diapositiva es un gráfico, diagrama o imagen sin texto. Analiza visualmente y describe lo que ves, explicando su significado y relevancia.
-- **IDIOMA:** Todas las explicaciones deben estar en **español**, pero mantén las **palabras técnicas más importantes** (términos clave, conceptos específicos) en su **idioma original** (inglés, alemán, etc.) para facilitar el aprendizaje de vocabulario técnico.
+- **IDIOMA:** Todas las explicaciones deben estar en **{language}**, pero mantén las **palabras técnicas más importantes** (términos clave, conceptos específicos) en su **idioma original** (inglés, alemán, etc.) para facilitar el aprendizaje de vocabulario técnico.
 
 INSTRUCCIONES
 1) Explica el tema principal y por qué es relevante.
-2) **EXPLICACIÓN DIDÁCTICA:** Divide la explicación completa en **puntos clave detallados y profundos** (no un párrafo largo). Cada punto debe ser **súper completo, técnico y profesional**, cubriendo TODOS los detalles visibles en la diapositiva sin omitir absolutamente nada. Explica conceptos complejos de manera que un principiante pueda entenderlos desde cero, pero con rigor técnico suficiente para convertir al lector en un experto absoluto que domine los conceptos y pueda usar términos técnicos correctamente. Incluye definiciones, ejemplos prácticos, analogías cuando ayuden, y conexiones lógicas. Mantén términos técnicos importantes en inglés o alemán si aplica, explicándolos en español. Usa más términos en inglés para conceptos clave y nombres específicos del PowerPoint, explicándolos en español cuando sea necesario. Proporciona el contenido directo sin prefijos como "Punto 1:", "Punto 2:", etc.
+2) **EXPLICACIÓN DIDÁCTICA:** Divide la explicación completa en **puntos clave detallados y profundos** (no un párrafo largo). Cada punto debe ser **súper completo, técnico y profesional**, cubriendo TODOS los detalles visibles en la diapositiva sin omitir absolutamente nada. Explica conceptos complejos de manera que un principiante pueda entenderlos desde cero, pero con rigor técnico suficiente para convertir al lector en un experto absoluto que domine los conceptos y pueda usar términos técnicos correctamente. Incluye definiciones, ejemplos prácticos, analogías cuando ayuden, y conexiones lógicas. Mantén términos técnicos importantes en inglés o alemán si aplica, explicándolos en {language} cuando sea necesario. Usa más términos en inglés para conceptos clave y nombres específicos del PowerPoint, explicándolos en {language} cuando sea necesario. Proporciona el contenido directo sin prefijos como "Punto 1:", "Punto 2:", etc.
 3) Resume conceptos principales adicionales en puntos clave (usando términos originales donde sea clave).
 4) Conecta con temas relacionados, pero haciéndolo específico y en relación con las demás diapositivas, no tan general. Aporta información realmente útil y que ayude a comprender mejor el tema, no datos innecesarios.
 5) Cierra con un **resumen corto** (2–3 frases con el takeaway).
@@ -48,13 +51,13 @@ Devuelve **únicamente** un **objeto JSON válido** (sin texto adicional, sin co
 NO copies literalmente el ejemplo; rellénalo con el contenido del slide.
 
 ```json
-{
+{{
   "titulo": "Tema o concepto central de la diapositiva",
   "explicacion_didactica": ["Punto 1: Detalle completo...", "Punto 2: Detalle completo...", "Punto 3: ..."],
   "puntos_clave": ["Idea 1", "Idea 2", "Idea 3"],
   "conexiones": "Relaciones con otros temas importantes",
   "resumen_corto": "Síntesis breve (2–3 frases)"
-}
+}}
 """
 
 
@@ -111,7 +114,7 @@ def extract_slides_from_pdf(pdf_file) -> List[bytes]:
         st.error(f"Error extracting slides from PDF: {str(e)}")
         return []
 
-def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number: int, custom_prompt: Optional[str] = None) -> Dict[str, Any]:
+def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number: int, custom_prompt: Optional[str] = None, selected_language: str = "Spanish") -> Dict[str, Any]:
     """
     Generate explanation for a single slide using OpenAI Vision API
     
@@ -128,13 +131,13 @@ def explain_slide(slide_image_bytes: bytes, openai_client: OpenAI, slide_number:
         image_base64 = encode_image_base64(slide_image_bytes)
         image_url = f"data:image/png;base64,{image_base64}"
         
-        # Use custom prompt if provided, otherwise use default
-        # IMPORTANT: Avoid str.format here because PROMPT_TEMPLATE contains JSON braces
+        # Use custom prompt if provided, otherwise use default with language adaptation
+        # IMPORTANT: Avoid str.format here because prompt templates contain JSON braces
         # which would be interpreted as format fields. We only want to substitute {slide_number}.
         if custom_prompt:
             explanation_prompt = custom_prompt.replace("{slide_number}", str(slide_number))
         else:
-            explanation_prompt = PROMPT_TEMPLATE
+            explanation_prompt = get_prompt(selected_language)
 
         
         # Call Vision API
@@ -633,7 +636,7 @@ def main():
             custom_prompt = st.text_area(
                 "Custom Prompt:",
                 height=200,
-                value=PROMPT_TEMPLATE,
+                value=get_prompt("Spanish"), ## muestra en español por default por ahora, cuando salgamos a vender en ingles
                 help="Use {slide_number} as placeholder for slide number",
                 label_visibility="collapsed"
             )
@@ -730,6 +733,62 @@ def main():
         
         # Process slides
         if st.session_state.explanations is None:
+            # Language selection
+            st.markdown("**🌐 Language Selection**")
+            language_options = {
+                "Spanish": "🇪🇸 Spanish",
+                "English": "🇺🇸 English", 
+                "French": "🇫🇷 French",
+                "German": "🇩🇪 German",
+                "Italian": "🇮🇹 Italian",
+                "Portuguese": "🇵🇹 Portuguese",
+                "Chinese": "🇨🇳 Chinese",
+                "Japanese": "🇯🇵 Japanese",
+                "Korean": "🇰🇷 Korean",
+                "Arabic": "🇸🇦 Arabic",
+                "Russian": "🇷🇺 Russian",
+                "Dutch": "🇳🇱 Dutch",
+                "Swedish": "🇸🇪 Swedish",
+                "Norwegian": "🇳🇴 Norwegian",
+                "Danish": "🇩🇰 Danish",
+                "Finnish": "🇫🇮 Finnish",
+                "Polish": "🇵🇱 Polish",
+                "Czech": "🇨🇿 Czech",
+                "Hungarian": "🇭🇺 Hungarian",
+                "Romanian": "🇷🇴 Romanian",
+                "Greek": "🇬🇷 Greek",
+                "Turkish": "🇹🇷 Turkish",
+                "Hebrew": "🇮🇱 Hebrew",
+                "Hindi": "🇮🇳 Hindi",
+                "Thai": "🇹🇭 Thai",
+                "Vietnamese": "🇻🇳 Vietnamese",
+                "Indonesian": "🇮🇩 Indonesian",
+                "Malay": "🇲🇾 Malay",
+                "Filipino": "🇵🇭 Filipino",
+                "Ukrainian": "🇺🇦 Ukrainian",
+                "Bulgarian": "🇧🇬 Bulgarian",
+                "Croatian": "🇭🇷 Croatian",
+                "Serbian": "🇷🇸 Serbian",
+                "Slovenian": "🇸🇮 Slovenian",
+                "Slovak": "🇸🇰 Slovak",
+                "Lithuanian": "🇱🇹 Lithuanian",
+                "Latvian": "🇱🇻 Latvian",
+                "Estonian": "🇪🇪 Estonian"
+            }
+            
+            selected_language = st.selectbox(
+                "Choose the language for slide explanations:",
+                options=list(language_options.keys()),
+                format_func=lambda x: language_options[x],
+                index=0 if st.session_state.selected_language == "Spanish" else list(language_options.keys()).index(st.session_state.selected_language) if st.session_state.selected_language in language_options else 0,
+                help="Select the language in which you want the AI to generate explanations"
+            )
+            
+            # Update session state
+            st.session_state.selected_language = selected_language
+            
+            st.markdown("")  # Add some space
+            
             if st.button("🚀 Analyze All Slides", type="primary"):
 
                 # Create progress tracking
@@ -743,7 +802,7 @@ def main():
                     status_text.text(f"Analyzing slide {slide_num} of {len(st.session_state.slides)}...")
 
                     # Analyze slide
-                    explanation = explain_slide(slide_bytes, openai_client, slide_num, custom_prompt, selected_language)
+                    explanation = explain_slide(slide_bytes, openai_client, slide_num, custom_prompt, st.session_state.selected_language)
                     explanations.append(explanation)
 
                     # Update progress
