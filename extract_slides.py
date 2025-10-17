@@ -5,7 +5,7 @@ Extract specific slides from PDF for testing
 import fitz  # PyMuPDF
 import sys
 
-def extract_slides(input_pdf_path, output_pdf_path, start_page, end_page):
+def extract_slides(input_pdf_path: str, output_pdf_path: str, start_page: int, end_page: int):
     """
     Extract specific pages from PDF and save as new PDF
     
@@ -22,7 +22,7 @@ def extract_slides(input_pdf_path, output_pdf_path, start_page, end_page):
         # Create a new PDF for the extracted pages
         new_pdf = fitz.open()
         
-        # Extract pages from start_page to end_page (inclusive)
+        # Extract pages from start_page to end_page (inclusive)r
         for page_num in range(start_page, min(end_page + 1, len(pdf_document))):
             page = pdf_document.load_page(page_num)
             new_pdf.insert_pdf(pdf_document, from_page=page_num, to_page=page_num)
