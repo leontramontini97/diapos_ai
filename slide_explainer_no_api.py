@@ -456,46 +456,6 @@ def generate_word_report(slides: List[bytes], explanations: List[Dict], pdf_name
             except:
                 pass
 
-def generate_summary_docx(summary_text: str, anki_cards_list: List[Dict[str, Any]]) -> bytes:
-    """Build a DOCX from a plain summary and optional Anki cards (no slides required)."""
-    if not isinstance(summary_text, str) or not summary_text.strip():
-        raise ValueError("Summary text is required")
-
-    tmp_docx_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
-    tmp_docx_file.close()
-
-    try:
-        doc = Document()
-
-        title_para = doc.add_paragraph("Lecture Summary")
-        if title_para.runs:
-            title_para.runs[0].bold = True
-
-        for paragraph in summary_text.split("\n\n"):
-            doc.add_paragraph(paragraph)
-
-        if isinstance(anki_cards_list, list) and anki_cards_list:
-            doc.add_paragraph("")
-            heading = doc.add_paragraph("Anki Cards")
-            if heading.runs:
-                heading.runs[0].bold = True
-            for idx, card in enumerate(anki_cards_list, 1):
-                q = (card.get('front') or card.get('pregunta') or '').strip()
-                a = (card.get('back') or card.get('respuesta') or '').strip()
-                if q or a:
-                    doc.add_paragraph(f"Q{idx}: {q}")
-                    doc.add_paragraph(f"A{idx}: {a}")
-                    doc.add_paragraph("")
-
-        doc.save(tmp_docx_file.name)
-        with open(tmp_docx_file.name, 'rb') as f:
-            return f.read()
-    finally:
-        try:
-            os.unlink(tmp_docx_file.name)
-        except:
-            pass
-
 def generate_anki_export(explanations: List[Dict], pdf_name: Optional[str]) -> bytes:
     """
     Generate Anki deck (.apkg) file from slide explanations using genanki
@@ -544,8 +504,8 @@ def generate_anki_export(explanations: List[Dict], pdf_name: Optional[str]) -> b
     # Create deck
     deck_name = f"PDF Slide Explainer - {pdf_name}" if pdf_name else "PDF Slide Explainer"
     anki_deck = genanki.Deck(
-        2059400110,  # Hardcoded unique deck ID --> tocacambair
-        deck_name
+        2059400110,  # Hardcoded unique deck ID
+        deck_name 
     )
 
     # Add notes to deck
@@ -1804,36 +1764,16 @@ def main():
             # Quiz Section (below all exports)
             if 'quiz_questions' in st.session_state and st.session_state.quiz_questions:
                 st.markdown("---")
-                st.markdown("""
-                <style>
-                .quiz-text {
-                    color: black !important;
-                }
-                .quiz-title {
-                    color: black !important;
-                    font-size: 1.5rem;
-                    font-weight: bold;
-                }
-                .quiz-question {
-                    color: black !important;
-                    font-size: 1.2rem;
-                    font-weight: 600;
-                }
-                .quiz-counter {
-                    color: black !important;
-                    font-weight: bold;
-                }
-                </style>
-                """, unsafe_allow_html=True)
-                st.markdown('<div class="quiz-title">🧠 Interactive Quiz</div>', unsafe_allow_html=True)
+                st.markdown("## 🧠 Interactive Quiz")
 
                 quiz_questions = st.session_state.quiz_questions
                 current_index = st.session_state.quiz_current_index
 
                 if current_index < len(quiz_questions):
                     question = quiz_questions[current_index]
-                    st.markdown(f'<div class="quiz-counter">Question {current_index + 1} of {len(quiz_questions)}</div>', unsafe_allow_html=True)
-                    st.markdown(f'<div class="quiz-question">{question["question"]}</div>', unsafe_allow_html=True)
+
+                    st.markdown(f"**Question {current_index + 1} of {len(quiz_questions)}**")
+                    st.markdown(f"### {question['question']}")
 
                     # Options as buttons in 2 columns
                     cols = st.columns(2)
@@ -1912,231 +1852,5 @@ def main():
                         st.session_state.quiz_show_feedback = False
                         st.rerun()
 
-def api_mode(file_path: str, language: str = "Spanish"):
-    """API mode for processing PDFs and returning JSON"""
-    import json
-    import sys
-    
-    try:
-        # Initialize OpenAI client
-        client = init_openai_client()
-        if not client:
-            print(json.dumps({"error": "Failed to initialize OpenAI client"}))
-            sys.exit(1)
-        
-        print(json.dumps({"debug": "OpenAI client initialized successfully"}), file=sys.stderr)
-        
-        # Extract slides from PDF
-        with open(file_path, 'rb') as f:
-            slides = extract_slides_from_pdf(f)
-        
-        if not slides:
-            print(json.dumps({"error": "No slides extracted from PDF"}))
-            sys.exit(1)
-        
-        # Process each slide
-        explanations = []
-        for i, slide in enumerate(slides):
-            print(json.dumps({"debug": f"Processing slide {i+1}"}), file=sys.stderr)
-            explanation = explain_slide(slide, client, i + 1, selected_language=language)
-            if explanation:
-                explanations.append(explanation)
-            else:
-                print(json.dumps({"debug": f"Slide {i+1} returned empty explanation"}), file=sys.stderr)
-        
-        # Generate summary
-        summary_parts = []
-        anki_cards = []
-        
-        for exp in explanations:
-            if exp and isinstance(exp, dict) and exp.get('success') and exp.get('explanation'):
-                exp_data = exp['explanation']
-                # Build readable summary from explicacion_didactica/resumen
-                didactica = exp_data.get('explicacion_didactica')
-                if isinstance(didactica, list):
-                    exp_text = "\n".join(item for item in didactica if isinstance(item, str))
-                elif isinstance(didactica, str):
-                    exp_text = didactica
-                else:
-                    exp_text = exp_data.get('resumen') or exp_data.get('resumen_corto') or ''
-
-                if exp_text:
-                    summary_parts.append(f"**Slide {exp.get('slide_number', '?')}:**\n{exp_text}")
-
-                # Correctly collect cards from nested explanation
-                cards = exp_data.get('anki_cards') or []
-                if isinstance(cards, list):
-                    anki_cards.extend(cards)
-        
-        summary = "\n\n".join(summary_parts)
-
-        # Prepare slides as base64 for downstream DOCX generation
-        slides_base64 = [encode_image_base64(s) for s in slides]
-
-        # Explanations may contain large raw content; trim to essentials to keep payload reasonable
-        trimmed_explanations = []
-        for exp in explanations:
-            if exp and isinstance(exp, dict):
-                trimmed = {
-                    "success": exp.get("success", False),
-                    "slide_number": exp.get("slide_number"),
-                    "explanation": exp.get("explanation"),
-                }
-                trimmed_explanations.append(trimmed)
-
-        # Return JSON result
-        result = {
-            "summary": summary,
-            "anki_cards": anki_cards,
-            "slides": len(slides),
-            "slides_base64": slides_base64,
-            "explanations": trimmed_explanations,
-        }
-
-        print(json.dumps(result))
-        
-    except Exception as e:
-        print(json.dumps({"error": str(e)}))
-        sys.exit(1)
-
-def quiz_api_mode(anki_file_path: str):
-    """Quiz API mode for generating quiz from anki cards"""
-    import json
-    import sys
-    
-    try:
-        # Load anki cards from file
-        with open(anki_file_path, 'r', encoding='utf-8') as f:
-            anki_cards = json.load(f)
-        
-        if not anki_cards:
-            print(json.dumps({"error": "No anki cards found"}))
-            sys.exit(1)
-        
-        # Generate quiz questions
-        quiz_questions = generate_quiz(anki_cards)
-        
-        if not quiz_questions:
-            print(json.dumps({"error": "Failed to generate quiz questions"}))
-            sys.exit(1)
-        
-        # Return JSON result
-        result = {
-            "questions": quiz_questions
-        }
-        
-        print(json.dumps(result))
-        
-    except Exception as e:
-        print(json.dumps({"error": str(e)}))
-        sys.exit(1)
-
-def docx_api_mode(data_file_path: str):
-    """DOCX API mode for generating Word document from summary and anki cards"""
-    import json
-    import sys
-    import tempfile
-    import os
-    
-    try:
-        # Load data from file
-        with open(data_file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        summary = data.get('summary', '')
-        anki_cards = data.get('ankiCards', [])
-        slides_base64 = data.get('slides_base64', [])
-        explanations = data.get('explanations', [])
-        
-        if not summary:
-            print(json.dumps({"error": "No summary found"}))
-            sys.exit(1)
-        
-        # Create temporary DOCX file
-        temp_dir = tempfile.mkdtemp()
-        docx_path = os.path.join(temp_dir, "lecture_summary.docx")
-        
-        # Rebuild slide bytes if provided
-        slides_bytes = []
-        try:
-            for s in (slides_base64 or []):
-                slides_bytes.append(base64.b64decode(s))
-        except Exception:
-            slides_bytes = []
-
-        # Prefer full image-based report; fallback to summary-only if unavailable
-        if slides_bytes and isinstance(explanations, list) and explanations:
-            try:
-                docx_bytes = generate_word_report(slides_bytes, explanations, "Lecture Summary")
-            except Exception:
-                docx_bytes = generate_summary_docx(summary, anki_cards)
-        else:
-            docx_bytes = generate_summary_docx(summary, anki_cards)
-        
-        # Save to file
-        with open(docx_path, 'wb') as f:
-            f.write(docx_bytes)
-        
-        # Return JSON result with file path
-        result = {
-            "docx_path": docx_path
-        }
-        
-        print(json.dumps(result))
-        
-    except Exception as e:
-        print(json.dumps({"error": str(e)}))
-        sys.exit(1)
-
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1 and sys.argv[1] == "--api":
-        # API mode
-        if "--file" in sys.argv:
-            file_idx = sys.argv.index("--file") + 1
-            if file_idx < len(sys.argv):
-                file_path = sys.argv[file_idx]
-                
-                language = "Spanish"  # default
-                if "--language" in sys.argv:
-                    lang_idx = sys.argv.index("--language") + 1
-                    if lang_idx < len(sys.argv):
-                        language = sys.argv[lang_idx]
-                
-                api_mode(file_path, language)
-            else:
-                print(json.dumps({"error": "No file path provided"}))
-                sys.exit(1)
-        else:
-            print(json.dumps({"error": "No file argument provided"}))
-            sys.exit(1)
-    elif len(sys.argv) > 1 and sys.argv[1] == "--quiz":
-        # Quiz generation mode
-        if "--anki-file" in sys.argv:
-            file_idx = sys.argv.index("--anki-file") + 1
-            if file_idx < len(sys.argv):
-                anki_file_path = sys.argv[file_idx]
-                quiz_api_mode(anki_file_path)
-            else:
-                print(json.dumps({"error": "No anki file path provided"}))
-                sys.exit(1)
-        else:
-            print(json.dumps({"error": "No anki file argument provided"}))
-            sys.exit(1)
-    elif len(sys.argv) > 1 and sys.argv[1] == "--docx":
-        # DOCX generation mode
-        if "--data-file" in sys.argv:
-            file_idx = sys.argv.index("--data-file") + 1
-            if file_idx < len(sys.argv):
-                data_file_path = sys.argv[file_idx]
-                docx_api_mode(data_file_path)
-            else:
-                print(json.dumps({"error": "No data file path provided"}))
-                sys.exit(1)
-        else:
-            print(json.dumps({"error": "No data file argument provided"}))
-            sys.exit(1)
-    else:
-        # Normal Streamlit mode
-        main()
+    main()
