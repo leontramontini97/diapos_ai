@@ -108,22 +108,25 @@ export function LectureUploader() {
 
   return (
     <div className="space-y-6">
-      <Card className="border-0 shadow-2xl bg-white/70 backdrop-blur-sm">
+      <Card className="border-2 border-orange-500/20 shadow-xl bg-white/80 backdrop-blur rounded-2xl">
         <CardHeader className="text-center pb-6">
+          <div className="mb-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-orange-500/10 text-orange-600 text-xs font-medium">
+            Upload & Convert
+          </div>
           <CardTitle className="flex items-center justify-center gap-2 text-2xl">
-            <Upload className="h-6 w-6 text-blue-600" />
+            <Upload className="h-6 w-6 text-orange-600" />
             Upload Lecture Slides
           </CardTitle>
           <CardDescription className="text-gray-600">Upload your PDF lecture slides to generate study materials</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-blue-200 bg-gradient-to-br from-blue-50 to-purple-50 p-12 transition-all duration-300 hover:border-blue-400 hover:shadow-lg group">
-            <FileText className="mb-4 h-16 w-16 text-blue-400 group-hover:text-blue-600 transition-colors" />
+          <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-orange-300 bg-gradient-to-br from-orange-50/70 via-white to-purple-50/70 p-14 transition-all duration-300 hover:border-orange-400 hover:shadow-lg group">
+            <FileText className="mb-4 h-16 w-16 text-orange-500 group-hover:text-orange-600 transition-colors" />
             <label htmlFor="file-upload" className="cursor-pointer">
-              <span className="text-lg font-medium text-blue-600 hover:text-blue-700 transition-colors">Choose a PDF file</span>
+              <span className="text-lg font-semibold text-orange-600 hover:text-orange-700 transition-colors">Choose a PDF file</span>
               <input id="file-upload" type="file" accept=".pdf" onChange={handleFileChange} className="hidden" />
             </label>
-            {file && <p className="mt-3 text-sm text-gray-600 bg-white px-3 py-1 rounded-full">📄 {file.name}</p>}
+            {file && <p className="mt-3 text-sm text-gray-700 bg-white/90 px-3 py-1 rounded-full border">📄 {file.name}</p>}
           </div>
 
           <div className="space-y-3">
@@ -155,7 +158,7 @@ export function LectureUploader() {
           <Button 
             onClick={handleUpload} 
             disabled={!file || isProcessing} 
-            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-lg hover:shadow-xl transition-all duration-300" 
+            className="w-full bg-gradient-to-r from-orange-500 to-purple-600 hover:from-orange-600 hover:to-purple-700 text-white shadow-lg hover:shadow-xl transition-all duration-300" 
             size="lg"
           >
             {isProcessing ? (
