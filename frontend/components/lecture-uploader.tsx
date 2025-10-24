@@ -1,12 +1,13 @@
 "use client"
 
 import React, { useEffect, useState } from "react"
-import { Upload, FileText, Download, Sparkles, Loader2, Globe } from "lucide-react"
+import { Upload, FileText, Download, Sparkles, Loader2, Globe, UserPlus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useSearchParams } from "next/navigation"
+import { useSearchParams, useRouter } from "next/navigation"
+import { createClient } from '@/lib/supabase/client'
 
 interface ProcessedResult {
   summary: string
@@ -22,12 +23,31 @@ export function LectureUploader() {
   const [result, setResult] = useState<ProcessedResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [language, setLanguage] = useState<string>("Spanish")
-  const [email, setEmail] = useState<string>("")
   const [jobId, setJobId] = useState<string>("")
   const [jobStatus, setJobStatus] = useState<string>("")
   const [jobOutputs, setJobOutputs] = useState<any | null>(null)
   const [isPurchasing, setIsPurchasing] = useState(false)
+  const [user, setUser] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
   const searchParams = useSearchParams()
+  const router = useRouter()
+  const supabase = createClient()
+
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      setUser(user)
+      setLoading(false)
+    }
+    
+    getUser()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setUser(session?.user ?? null)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [supabase])
 
   useEffect(() => {
     const success = searchParams.get("success")
@@ -53,7 +73,10 @@ export function LectureUploader() {
 
   const handleUpload = async () => {
     if (!file) return
-    if (!email) { setError("Please enter your email first."); return }
+    if (!user) { 
+      router.push('/auth')
+      return 
+    }
 
     setIsProcessing(true)
     setError(null)
@@ -67,7 +90,7 @@ export function LectureUploader() {
       const presignRes = await fetch("/api/upload-url", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, filename: file.name, contentType: file.type || "application/pdf" })
+        body: JSON.stringify({ filename: file.name, contentType: file.type || "application/pdf" })
       })
       if (!presignRes.ok) throw new Error("Failed to request upload URL")
       const { key, url } = await presignRes.json()
@@ -80,7 +103,7 @@ export function LectureUploader() {
       const procRes = await fetch("/api/process-lecture", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, s3Key: key, language })
+        body: JSON.stringify({ s3Key: key, language })
       })
       if (procRes.status === 402) {
         setError("Insufficient credits. Please purchase a credit and try again.")
@@ -119,14 +142,17 @@ export function LectureUploader() {
   }
 
   const handleBuyCredit = async () => {
-    if (!email) { setError("Please enter your email before purchasing."); return }
+    if (!user) { 
+      router.push('/auth')
+      return 
+    }
     setIsPurchasing(true)
     setError(null)
     try {
       const res = await fetch("/api/checkout/session", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, quantity: 1 })
+        body: JSON.stringify({ quantity: 1 })
       })
       if (!res.ok) throw new Error("Failed to create checkout session")
       const data = await res.json()
@@ -200,24 +226,27 @@ export function LectureUploader() {
           <CardDescription className="text-gray-600">Upload your PDF lecture slides to generate study materials</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="md:col-span-2">
-              <label className="block text-sm font-semibold text-gray-700 mb-1">Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="w-full rounded-md border border-orange-300 bg-white/90 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
-              />
-            </div>
-            <div className="flex items-end">
-              <Button onClick={handleBuyCredit} disabled={!email || isPurchasing} className="w-full bg-orange-600 hover:bg-orange-700 text-white">
+          {!loading && user && (
+            <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-lg p-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                  <span className="text-green-600 font-medium">{user.email?.[0]?.toUpperCase()}</span>
+                </div>
+                <div>
+                  <p className="font-medium text-green-800">Signed in as</p>
+                  <p className="text-sm text-green-600">{user.email}</p>
+                </div>
+              </div>
+              <Button 
+                onClick={handleBuyCredit} 
+                disabled={isPurchasing} 
+                className="bg-orange-600 hover:bg-orange-700 text-white"
+              >
                 {isPurchasing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Buy 1 credit ($3)
               </Button>
             </div>
-          </div>
+          )}
 
           <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-orange-300 bg-gradient-to-br from-orange-50/70 via-white to-purple-50/70 p-14 transition-all duration-300 hover:border-orange-400 hover:shadow-lg group">
             <FileText className="mb-4 h-16 w-16 text-orange-500 group-hover:text-orange-600 transition-colors" />
@@ -264,6 +293,11 @@ export function LectureUploader() {
               <>
                 <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                 Processing your slides...
+              </>
+            ) : !user ? (
+              <>
+                <UserPlus className="mr-2 h-5 w-5" />
+                Sign in to convert
               </>
             ) : (
               <>
