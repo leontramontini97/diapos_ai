@@ -97,10 +97,10 @@ export async function POST(req: NextRequest) {
           'INSERT INTO payments (email, credits_purchased, stripe_payment_intent_id, user_id) VALUES ($1, $2, $3, $4) ON CONFLICT (stripe_payment_intent_id) DO NOTHING',
           [email, quantity, paymentIntentId, userId]
         )
-        // Update user credits using user_id (more secure than email)
+        // Update user credits using email
         await client.query(
-          'INSERT INTO users (id, email, credits_remaining) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET credits_remaining = users.credits_remaining + EXCLUDED.credits_remaining',
-          [userId, email, quantity]
+          'INSERT INTO users (email, credits_remaining) VALUES ($1, $2) ON CONFLICT (email) DO UPDATE SET credits_remaining = users.credits_remaining + EXCLUDED.credits_remaining',
+          [email, quantity]
         )
       })
       

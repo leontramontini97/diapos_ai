@@ -104,15 +104,14 @@ export async function withTransaction<T>(fn: (client: any) => Promise<T>): Promi
       }
       
       if (text.includes('INSERT INTO users') && text.includes('ON CONFLICT')) {
-        const [userId, email, credits] = params || []
+        const [email, credits] = params || []
         const { data, error } = await supabaseAdmin
           .from('users')
           .upsert({ 
-            id: userId,
             email, 
             credits_remaining: credits 
           }, { 
-            onConflict: 'id',
+            onConflict: 'email',
             ignoreDuplicates: false 
           })
           .select()

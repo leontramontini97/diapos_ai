@@ -12,9 +12,9 @@ export async function GET() {
       return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
     }
 
-    // Get user credits and payment history
-    const userResult = await query('SELECT * FROM users WHERE id = $1', [user.id])
-    const paymentsResult = await query('SELECT * FROM payments WHERE user_id = $1 ORDER BY created_at DESC', [user.id])
+    // Get user credits and payment history using email
+    const userResult = await query('SELECT * FROM users WHERE email = $1', [user.email])
+    const paymentsResult = await query('SELECT * FROM payments WHERE email = $1 ORDER BY created_at DESC', [user.email])
     
     return NextResponse.json({
       user: userResult.rows[0] || { id: user.id, email: user.email, credits_remaining: 0 },
