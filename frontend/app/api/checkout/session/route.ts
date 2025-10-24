@@ -7,7 +7,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '20
 export async function POST(req: NextRequest) {
   try {
     // Check if user is authenticated
-    const supabase = createClient()
+    const supabase = await createClient()
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     
     if (authError || !user) {

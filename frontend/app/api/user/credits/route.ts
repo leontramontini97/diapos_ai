@@ -5,7 +5,7 @@ import { query } from '@/lib/db'
 export async function GET() {
   try {
     // Check if user is authenticated
-    const supabase = createClient()
+    const supabase = await createClient()
     const { data: { user }, error: authError } = await supabase.auth.getUser()
     
     if (authError || !user) {
