@@ -13,8 +13,14 @@ export async function GET() {
     }
 
     // Get user credits and payment history using email
+    console.log('Fetching data for user email:', user.email)
+    console.log('User object:', JSON.stringify(user, null, 2))
+    
     const userResult = await query('SELECT * FROM users WHERE email = $1', [user.email])
     const paymentsResult = await query('SELECT * FROM payments WHERE email = $1 ORDER BY created_at DESC', [user.email])
+    
+    console.log('User query result:', userResult.rows)
+    console.log('Payments query result:', paymentsResult.rows)
     
     return NextResponse.json({
       user: userResult.rows[0] || { id: user.id, email: user.email, credits_remaining: 0 },
