@@ -21,37 +21,75 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object as Stripe.Checkout.Session
-      const email = (
-        session.customer_email ||
-        (session.customer_details as any)?.email ||
-        (session.metadata as any)?.email ||
-        ''
-      ).toLowerCase()
-      const userId = (session.metadata as any)?.user_id
-      const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
-      const quantity = 1 // default 1; adjust later if using bundles
+    if (event.type === 'checkout.session.completed' || event.type === 'payment_intent.succeeded') {
+      let email = ''
+      let userId = ''
+      let paymentIntentId = ''
+      let sessionId = ''
+      const quantity = 1
+
+      if (event.type === 'checkout.session.completed') {
+        const session = event.data.object as Stripe.Checkout.Session
+        email = (
+          session.customer_email ||
+          (session.customer_details as any)?.email ||
+          (session.metadata as any)?.email ||
+          ''
+        ).toLowerCase()
+        userId = (session.metadata as any)?.user_id
+        paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
+        sessionId = session.id
+      } else if (event.type === 'payment_intent.succeeded') {
+        const paymentIntent = event.data.object as Stripe.PaymentIntent
+        paymentIntentId = paymentIntent.id
+        
+        // For payment_intent.succeeded, we need to get the checkout session to find user_id
+        if (paymentIntent.latest_charge) {
+          const chargeId = typeof paymentIntent.latest_charge === 'string' ? paymentIntent.latest_charge : paymentIntent.latest_charge.id
+          const charge = await stripe.charges.retrieve(chargeId)
+          if (charge.billing_details?.email) {
+            email = charge.billing_details.email.toLowerCase()
+          }
+        }
+        
+        // Try to find the session with this payment intent to get user_id
+        const sessions = await stripe.checkout.sessions.list({
+          payment_intent: paymentIntentId,
+          limit: 1
+        })
+        
+        if (sessions.data.length > 0) {
+          const session = sessions.data[0]
+          userId = (session.metadata as any)?.user_id || ''
+          if (!email) {
+            email = (
+              session.customer_email ||
+              (session.customer_details as any)?.email ||
+              (session.metadata as any)?.email ||
+              ''
+            ).toLowerCase()
+          }
+          sessionId = session.id
+        }
+      }
       
       try {
         await query('INSERT INTO events (type, data) VALUES ($1, $2)', [
           'stripe.webhook.received',
           {
             eventType: event.type,
-            sessionId: session.id,
+            sessionId,
             email,
             userId,
-            emailFields: {
-              customer_email: session.customer_email,
-              customer_details_email: (session.customer_details as any)?.email,
-              metadata_email: (session.metadata as any)?.email,
-            },
             paymentIntentId,
           },
         ])
       } catch (e) {}
       
-      if (!email || !paymentIntentId || !userId) return NextResponse.json({ received: true })
+      if (!email || !paymentIntentId || !userId) {
+        console.log('Missing required fields:', { email, paymentIntentId, userId })
+        return NextResponse.json({ received: true })
+      }
 
       await withTransaction(async (client: any) => {
         // Store payment with user_id
@@ -69,9 +107,11 @@ export async function POST(req: NextRequest) {
       try {
         await query('INSERT INTO events (type, data) VALUES ($1, $2)', [
           'stripe.webhook.credited',
-          { sessionId: session.id, email, userId, paymentIntentId, quantity },
+          { sessionId, email, userId, paymentIntentId, quantity },
         ])
       } catch (e) {}
+      
+      console.log('Successfully processed payment:', { email, userId, paymentIntentId, quantity })
     }
   } catch (err) {
     console.error('webhook handler error', err)
