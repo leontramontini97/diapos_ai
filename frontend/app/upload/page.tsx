@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { Suspense } from "react"
 import { Brain } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { LectureUploader } from "@/components/lecture-uploader"
@@ -18,6 +19,9 @@ export default function UploadPage() {
           <nav className="hidden md:flex items-center gap-6">
             <Link href="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Home
+            </Link>
+            <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              Dashboard
             </Link>
             <Link href="/upload">
               <Button size="sm" className="bg-orange-500 hover:bg-orange-600 text-white">Convert PDF</Button>
@@ -42,7 +46,9 @@ export default function UploadPage() {
       {/* Uploader */}
       <section className="container mx-auto px-4 pb-16">
         <div className="mx-auto max-w-4xl">
-          <LectureUploader />
+          <Suspense fallback={<div className="text-center text-sm text-muted-foreground">Loading…</div>}>
+            <LectureUploader />
+          </Suspense>
         </div>
       </section>
 

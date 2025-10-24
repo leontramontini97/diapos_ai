@@ -1,107 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { spawn } from 'child_process'
-import path from 'path'
-import fs from 'fs/promises'
 import { v4 as uuidv4 } from 'uuid'
+import { withTransaction } from '@/lib/db'
+
+async function startWorker(jobId: string, s3Key: string, email: string) {
+  const workerUrl = process.env.WORKER_URL
+  if (!workerUrl) throw new Error('Worker not configured')
+  const res = await fetch(`${workerUrl}/process`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jobId, s3Key, email }),
+  })
+  if (!res.ok) throw new Error('Failed to start worker')
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData()
-    const file = formData.get('file') as File
-    const language = formData.get('language') as string || 'Spanish'
+    const body = await request.json()
+    const email = (body?.email || '').toString().trim().toLowerCase()
+    const s3Key = (body?.s3Key || '').toString().trim()
 
-    if (!file) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+    if (!email || !s3Key) {
+      return NextResponse.json({ error: 'Missing email or s3Key' }, { status: 400 })
     }
 
-    if (file.type !== 'application/pdf') {
-      return NextResponse.json({ error: 'File must be a PDF' }, { status: 400 })
-    }
+    const jobId = uuidv4()
 
-    // Create temporary file
-    const tempId = uuidv4()
-    const tempDir = path.join(process.cwd(), 'temp')
-    await fs.mkdir(tempDir, { recursive: true })
-    const tempFilePath = path.join(tempDir, `${tempId}.pdf`)
-
-    // Save uploaded file
-    const arrayBuffer = await file.arrayBuffer()
-    await fs.writeFile(tempFilePath, new Uint8Array(arrayBuffer))
-
-    // Call Python script to process the PDF
-    const pythonScriptPath = path.join(process.cwd(), '..', 'slide_explainer.py')
-    
-    return new Promise<NextResponse>((resolve) => {
-      const python = spawn(
-        'python3',
-        [pythonScriptPath, '--api', '--file', tempFilePath, '--language', language],
-        {
-          env: {
-            ...process.env,
-            OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
-            PYTHONUNBUFFERED: '1',
-          },
-        }
-      )
-      
-      let output = ''
-      let error = ''
-
-      python.stdout.on('data', (data) => {
-        output += data.toString()
-      })
-
-      python.stderr.on('data', (data) => {
-        error += data.toString()
-      })
-
-      python.on('close', async (code) => {
-        // Clean up temp file
-        try {
-          await fs.unlink(tempFilePath)
-        } catch (e) {
-          console.error('Failed to clean up temp file:', e)
-        }
-
-        if (code === 0) {
-          try {
-            console.log('Python output:', output.substring(0, 200))
-            if (error) {
-              console.error('Python stderr (non-fatal):', error.substring(0, 2000))
-            }
-            const result = JSON.parse(output)
-            const normalizedCards = Array.isArray(result.anki_cards)
-              ? result.anki_cards.map((c: any) => ({
-                  front: c?.front ?? c?.pregunta ?? '',
-                  back: c?.back ?? c?.respuesta ?? '',
-                }))
-              : []
-            console.log('Parsed result:', { 
-              summary: result.summary?.substring(0, 100), 
-              ankiCardsCount: normalizedCards.length,
-              slides: result.slides,
-              slidesBase64: Array.isArray(result.slides_base64) ? result.slides_base64.length : undefined,
-              explanationsCount: Array.isArray(result.explanations) ? result.explanations.length : undefined,
-            })
-            resolve(NextResponse.json({
-              summary: result.summary,
-              ankiCards: normalizedCards,
-              slides: result.slides,
-              slides_base64: result.slides_base64,
-              explanations: result.explanations,
-            }))
-          } catch (parseError) {
-            resolve(NextResponse.json({ error: 'Failed to parse Python output' }, { status: 500 }))
-          }
-        } else {
-          console.error('Python script error:', error)
-          resolve(NextResponse.json({ error: 'Processing failed' }, { status: 500 }))
-        }
-      })
+    await withTransaction(async (client: any) => {
+      const userRes = await client.query('SELECT credits_remaining FROM users WHERE email = $1 FOR UPDATE', [email])
+      const credits = userRes.rows?.[0]?.credits_remaining ?? 0
+      if (credits <= 0) {
+        throw new Error('INSUFFICIENT_CREDITS')
+      }
+      await client.query('UPDATE users SET credits_remaining = credits_remaining - 1 WHERE email = $1', [email])
+      await client.query('INSERT INTO jobs (id, email, file_key, status) VALUES ($1, $2, $3, $4)', [jobId, email, s3Key, 'pending'])
     })
 
-  } catch (error) {
-    console.error('API error:', error)
+    await startWorker(jobId, s3Key, email)
+    return NextResponse.json({ jobId })
+  } catch (error: any) {
+    if (error?.message === 'INSUFFICIENT_CREDITS') {
+      return NextResponse.json({ error: 'Insufficient credits' }, { status: 402 })
+    }
+    console.error('process-lecture error', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
