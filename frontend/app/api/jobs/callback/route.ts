@@ -16,10 +16,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     const body = JSON.parse(raw.toString())
-    const { jobId, outputs } = body
+    const { jobId, status, outputs, error } = body
     if (!jobId) return NextResponse.json({ error: 'jobId required' }, { status: 400 })
 
-    await query('UPDATE jobs SET status = $2, outputs_json = $3, completed_at = NOW() WHERE id = $1', [jobId, 'completed', outputs || {}])
+    // Handle both completed and failed statuses
+    if (status === 'completed') {
+      await query('UPDATE jobs SET status = $2, outputs_json = $3, completed_at = NOW() WHERE id = $1', [jobId, 'completed', outputs || {}])
+    } else if (status === 'failed') {
+      await query('UPDATE jobs SET status = $2, error_message = $3, completed_at = NOW() WHERE id = $1', [jobId, 'failed', error?.message || 'Unknown error'])
+    } else {
+      return NextResponse.json({ error: 'Invalid status' }, { status: 400 })
+    }
+    
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('callback error', err)

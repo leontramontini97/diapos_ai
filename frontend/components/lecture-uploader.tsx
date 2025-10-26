@@ -103,7 +103,7 @@ export function LectureUploader() {
       const procRes = await fetch("/api/process-lecture", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ s3Key: key, language })
+        body: JSON.stringify({ s3Key: key, email: user.email, language })
       })
       if (procRes.status === 402) {
         setError("Insufficient credits. Please purchase a credit and try again.")
@@ -315,10 +315,52 @@ export function LectureUploader() {
           )}
 
           {jobOutputs && (
-            <div className="rounded-lg border p-4 bg-white/70">
-              <div className="text-sm font-semibold mb-2">Results</div>
-              <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(jobOutputs, null, 2)}</pre>
-            </div>
+            <Card className="border-2 shadow-lg bg-gradient-to-r from-green-50 to-blue-50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-green-800">
+                  <Sparkles className="h-5 w-5" />
+                  Processing Complete!
+                </CardTitle>
+                <CardDescription className="text-green-700">
+                  Successfully processed {jobOutputs.total_slides || 0} slides
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {jobOutputs.docx_url && (
+                  <a 
+                    href={jobOutputs.docx_url} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-green-200 rounded-lg hover:bg-green-50 transition-colors"
+                  >
+                    <Download className="h-4 w-4 text-green-600" />
+                    <span className="font-medium text-green-800">Download Word Document (.docx)</span>
+                  </a>
+                )}
+                {jobOutputs.anki_url && (
+                  <a 
+                    href={jobOutputs.anki_url} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+                  >
+                    <Download className="h-4 w-4 text-blue-600" />
+                    <span className="font-medium text-blue-800">Download Anki Deck (.apkg)</span>
+                  </a>
+                )}
+                {jobOutputs.summary_json_url && (
+                  <a 
+                    href={jobOutputs.summary_json_url} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-purple-200 rounded-lg hover:bg-purple-50 transition-colors"
+                  >
+                    <Download className="h-4 w-4 text-purple-600" />
+                    <span className="font-medium text-purple-800">Download Summary (JSON)</span>
+                  </a>
+                )}
+              </CardContent>
+            </Card>
           )}
         </CardContent>
       </Card>

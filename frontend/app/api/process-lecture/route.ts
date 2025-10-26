@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { withTransaction } from '@/lib/db'
 
-async function startWorker(jobId: string, s3Key: string, email: string) {
+async function startWorker(jobId: string, s3Key: string, email: string, language: string = 'Spanish') {
   const workerUrl = process.env.WORKER_URL
   if (!workerUrl) throw new Error('Worker not configured')
   const res = await fetch(`${workerUrl}/process`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jobId, s3Key, email }),
+    body: JSON.stringify({ jobId, s3Key, email, language }),
   })
   if (!res.ok) throw new Error('Failed to start worker')
 }
@@ -18,6 +18,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const email = (body?.email || '').toString().trim().toLowerCase()
     const s3Key = (body?.s3Key || '').toString().trim()
+    const language = (body?.language || 'Spanish').toString().trim()
 
     if (!email || !s3Key) {
       return NextResponse.json({ error: 'Missing email or s3Key' }, { status: 400 })
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
       await client.query('INSERT INTO jobs (id, email, file_key, status) VALUES ($1, $2, $3, $4)', [jobId, email, s3Key, 'pending'])
     })
 
-    await startWorker(jobId, s3Key, email)
+    await startWorker(jobId, s3Key, email, language)
     return NextResponse.json({ jobId })
   } catch (error: any) {
     if (error?.message === 'INSUFFICIENT_CREDITS') {
