@@ -28,14 +28,8 @@ Copy this output - you'll use it for `WORKER_CALLBACK_SECRET`
 5. Set root directory to `worker` (if needed)
 6. Railway auto-detects Dockerfile ✓
 
-**Option B: Railway CLI**
-```bash
-npm install -g @railway/cli
-cd worker/
-railway login
-railway init
-railway up
-```
+
+
 
 ### Step 3: Set Environment Variables in Railway
 
