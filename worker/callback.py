@@ -66,8 +66,7 @@ async def send_callback(
     # Build payload
     payload = {
         "jobId": job_id,
-        "status": status,
-        "secret": CALLBACK_SECRET
+        "status": status
     }
     
     if outputs:
